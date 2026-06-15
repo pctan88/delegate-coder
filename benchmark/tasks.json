@@ -1,0 +1,52 @@
+{
+  "tasks": [
+    {
+      "id": "bulkread-architecture",
+      "category": "bulk-read",
+      "prompt": "Analyze the architecture of commander.js. Produce a summary in ARCHITECTURE.md listing the main files in lib/ and what each is responsible for.",
+      "verify": "test -f ARCHITECTURE.md && [ $(wc -l < ARCHITECTURE.md) -ge 15 ]"
+    },
+    {
+      "id": "bulkread-parse-flow",
+      "category": "bulk-read",
+      "prompt": "Trace the full flow of `program.parse()` through `lib/` and document the call chain in PARSE_FLOW.md.",
+      "verify": "test -f PARSE_FLOW.md && [ $(wc -l < PARSE_FLOW.md) -ge 30 ] && grep -q 'parse' PARSE_FLOW.md"
+    },
+    {
+      "id": "implement-ping",
+      "category": "implement",
+      "prompt": "Add a dummy 'ping' method to the Command class in lib/command.js that returns 'pong'. Also add a simple unit test for it in a new file tests/ping.test.js.",
+      "verify": "grep -qw 'ping' lib/command.js && test -f tests/ping.test.js && npm test"
+    },
+    {
+      "id": "implement-exclusive-option",
+      "category": "implement",
+      "prompt": "Add a new method `exclusiveWith(name)` to the `Option` class (in `lib/option.js`) that allows an option to declare it is mutually exclusive with another option's long name. Then, in `lib/command.js`, during option validation, if both mutually exclusive options are provided, throw a `CommanderError` with code `commander.mutuallyExclusive` and a descriptive message. Add comprehensive tests for this new behavior in a new file `tests/options.exclusive.test.js`.",
+      "verify": "grep -qw 'exclusiveWith' lib/option.js && test -f tests/options.exclusive.test.js && grep -q 'exclusiveWith' tests/options.exclusive.test.js && npm test"
+    },
+    {
+      "id": "refactor-rename-help",
+      "category": "refactor",
+      "prompt": "Rename the 'createHelp' method to 'buildHelp' everywhere in lib/command.js and tests/.",
+      "verify": "! grep -rq 'createHelp' lib/ tests/ && npm test"
+    },
+    {
+      "id": "refactor-error",
+      "category": "refactor",
+      "prompt": "Rename the class 'CommanderError' to 'CmdError' everywhere needed for npm test to pass, excluding docs/READMEs/CHANGELOG.",
+      "verify": "! grep -q 'class CommanderError' lib/error.js && grep -q 'class CmdError' lib/error.js && npm test"
+    },
+    {
+      "id": "review-option",
+      "category": "review",
+      "prompt": "Review lib/option.js for any code style or logic issues, and write your findings to OPTION_REVIEW.md. Include file and line references.",
+      "verify": "test -f OPTION_REVIEW.md && [ $(wc -l < OPTION_REVIEW.md) -ge 10 ] && grep -qE '\\.js:[0-9]+' OPTION_REVIEW.md"
+    },
+    {
+      "id": "review-diff",
+      "category": "review",
+      "prompt": "Review the diff of the last 5 commits. Write bugs, style issues, and missing tests findings with file and line references to REVIEW.md.",
+      "verify": "test -f REVIEW.md && [ $(wc -l < REVIEW.md) -ge 15 ] && grep -qE '\\.(js|ts|md):[0-9]+' REVIEW.md"
+    }
+  ]
+}

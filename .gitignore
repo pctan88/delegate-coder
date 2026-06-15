@@ -1,0 +1,30 @@
+# Secrets — never commit
+.env
+*.env
+
+# OS junk
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# Benchmark generated artifacts (keep RESULTS.md, not raw runs)
+benchmark/target-repo/
+benchmark/results/
+*.transcript.json
+*.stderr
+
+# Skill runtime artifacts
+.claude/delegate-coder.log
+.claude/delegate_fired
+
+# Local archives
+_archive/

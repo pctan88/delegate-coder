@@ -1,0 +1,22 @@
+{
+  "name": "delegate-coder",
+  "version": "0.2.0",
+  "description": "Orchestrate a cheaper CLI coding agent (MiMo, Aider, Codex, Gemini, Qwen, OpenCode) as a worker to save Claude usage on execution-heavy coding tasks. Claude plans and reviews; the worker reads code and writes first-pass implementations.",
+  "author": {
+    "name": "Tan Poi Cheong"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/pctan88/delegate-coder",
+  "repository": "https://github.com/pctan88/delegate-coder",
+  "keywords": [
+    "delegate",
+    "worker-agent",
+    "token-savings",
+    "mimo",
+    "aider",
+    "codex",
+    "gemini",
+    "code-review",
+    "refactoring"
+  ]
+}

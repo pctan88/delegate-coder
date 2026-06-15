@@ -1,0 +1,13 @@
+{
+  "name": "delegate-coder",
+  "owner": {
+    "name": "Tan Poi Cheong"
+  },
+  "plugins": [
+    {
+      "name": "delegate-coder",
+      "source": "./",
+      "description": "Delegate execution-heavy coding work (bulk reading, implementation, refactoring, first-pass review) to a cheaper CLI worker agent to save Claude usage."
+    }
+  ]
+}
