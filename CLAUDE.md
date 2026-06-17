@@ -1,10 +1,13 @@
 # delegate-coder — repo guide for Claude Code
 
-This repo contains a Claude Code skill (`skills/delegate-coder/`) that delegates execution-heavy coding work to a cheaper worker agent (MiMo, Aider, Codex CLI, Gemini CLI, Qwen Code, OpenCode), and an A/B benchmark harness (`benchmark/`) that measures whether the skill reduces Claude credit usage without hurting accuracy.
+This repo is a Claude Code **plugin marketplace** (`tan-tools`). The plugin `delegate-coder` (`plugins/delegate-coder/`) delegates execution-heavy coding work to a cheaper worker agent (MiMo, Aider, Codex CLI, Gemini CLI, Qwen Code, OpenCode), and an A/B benchmark harness (`benchmark/`) measures whether the skill reduces Claude credit usage without hurting accuracy.
 
 ## Layout
 
-- `skills/delegate-coder/` — the skill: SKILL.md (orchestration workflow), scripts/delegate.sh (universal adapter), scripts/detect.sh (worker detection), references/ (per-agent commands, setup)
+- `.claude-plugin/marketplace.json` — marketplace manifest (`tan-tools`), points at `./plugins/delegate-coder`
+- `plugins/delegate-coder/.claude-plugin/plugin.json` — plugin manifest
+- `plugins/delegate-coder/skills/delegate-coder/` — the skill: SKILL.md (orchestration workflow), scripts/delegate.sh (universal adapter), scripts/detect.sh (worker detection), references/ (per-agent commands, setup)
+- `plugins/delegate-coder/commands/` — the `/delegate-*` slash commands
 - `benchmark/run_benchmark.sh` — A/B runner: condition A = no skill, condition B = skill installed; interleaved, hard git reset between runs
 - `benchmark/tasks.json` — task definitions (currently EXAMPLE placeholders — must be adapted to the target repo before running)
 - `benchmark/report.py` — aggregates `benchmark/results/*.json` into the publishable table
@@ -15,7 +18,7 @@ This repo contains a Claude Code skill (`skills/delegate-coder/`) that delegates
 1. **Check prerequisites.** All must pass before anything else:
    - `claude --version` (Claude Code CLI, authenticated)
    - `jq --version`
-   - A worker agent installed — run `bash skills/delegate-coder/scripts/detect.sh`. If none found, stop and tell the user; the benchmark is meaningless without one.
+   - A worker agent installed — run `bash plugins/delegate-coder/skills/delegate-coder/scripts/detect.sh`. If none found, stop and tell the user; the benchmark is meaningless without one.
 2. **Confirm the target repo with the user.** It must be a local git repo with a fast, reliable test suite. Never assume; ask. Clone it fresh if needed. Record its path, base commit, and test command.
 3. **Adapt `benchmark/tasks.json`** to the target repo: 6–12 tasks covering all four categories (bulk-read, implement, refactor, review). Every `verify` command must exit 0 on success and be objective (tests/lint/grep). Replace ALL example tasks — they reference files that don't exist in the target repo.
 4. **Smoke run first.** `REPS=1` with 1–2 tasks to validate wiring before the full run. Each run is a full `claude -p` session and consumes real Claude usage — do not launch the full matrix until the smoke run produces sane JSON in `benchmark/results/`.
@@ -23,7 +26,7 @@ This repo contains a Claude Code skill (`skills/delegate-coder/`) that delegates
    ```bash
    cd benchmark
    REPO_DIR=/path/to/target-repo \
-   SKILL_SRC=$(pwd)/../skills/delegate-coder \
+   SKILL_SRC=$(pwd)/../plugins/delegate-coder/skills/delegate-coder \
    REPS=3 \
    bash run_benchmark.sh
    ```

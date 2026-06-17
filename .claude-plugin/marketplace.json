@@ -1,12 +1,16 @@
 {
-  "name": "delegate-coder",
+  "name": "tan-tools",
   "owner": {
-    "name": "Tan Poi Cheong"
+    "name": "Tan",
+    "email": "tanpoicheong@gmail.com"
+  },
+  "metadata": {
+    "description": "Tan's personal Claude Code tools — currently the delegate-coder plugin for offloading execution-heavy coding work to a cheaper worker agent."
   },
   "plugins": [
     {
       "name": "delegate-coder",
-      "source": "./",
+      "source": "./plugins/delegate-coder",
       "description": "Delegate execution-heavy coding work (bulk reading, implementation, refactoring, first-pass review) to a cheaper CLI worker agent to save Claude usage."
     }
   ]

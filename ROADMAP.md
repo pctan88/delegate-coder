@@ -12,9 +12,9 @@ The benchmark is a headless `claude -p` session that reads the skill and runs
 its delegation path. A change requires re-running **only if** it alters what that
 headless run actually executes:
 
-- `skills/delegate-coder/SKILL.md` — instructions / triggering wording
-- `skills/delegate-coder/scripts/detect.sh` — agent resolution
-- `skills/delegate-coder/scripts/delegate.sh` — the worker invocation for the
+- `plugins/delegate-coder/skills/delegate-coder/SKILL.md` — instructions / triggering wording
+- `plugins/delegate-coder/skills/delegate-coder/scripts/detect.sh` — agent resolution
+- `plugins/delegate-coder/skills/delegate-coder/scripts/delegate.sh` — the worker invocation for the
   benchmarked agent/mode
 
 Everything else is safe. The design principle below is therefore:
@@ -37,21 +37,21 @@ Claude Code **plugin wrapper** whose slash commands just (a) write config and
 (b) read the audit log, then call the same `delegate.sh`.
 
 ```
-delegate-coder/
-  skills/delegate-coder/        # core, kept stable (benchmarked)
-    SKILL.md
-    scripts/{detect.sh,delegate.sh}
-    references/{adapters.md,setup.md}
-  commands/                     # slash commands -> config writes / log reads
-    delegate-on.md  delegate-off.md  delegate-model.md
-    delegate-stats.md  delegate-doctor.md  delegate-setup.md
-  .claude-plugin/               # plugin metadata
-    plugin.json
-    marketplace.json
+delegate-coder/                          # repo root = marketplace
+  .claude-plugin/marketplace.json        # marketplace "tan-tools"
+  plugins/delegate-coder/                # the plugin
+    .claude-plugin/plugin.json           # plugin metadata
+    skills/delegate-coder/               # core, kept stable (benchmarked)
+      SKILL.md
+      scripts/{detect.sh,delegate.sh}
+      references/{adapters.md,setup.md}
+    commands/                            # slash commands -> config writes / log reads
+      delegate-on.md  delegate-off.md  delegate-model.md
+      delegate-stats.md  delegate-doctor.md  delegate-setup.md
 ```
 
 This satisfies ideas 1, 5, 6, 7 cleanly while leaving the benchmarked skill
-untouched.
+untouched. **Implemented** — the repo now ships this nested marketplace layout.
 
 ## Config schema (`.claude/delegate-coder.json`)
 

@@ -11,6 +11,6 @@ echo "Installing delegate-coder skill to $TARGET ..."
 git clone --depth 1 "$REPO" "$TMP/repo" 2>/dev/null || { echo "git clone failed — check the repo URL"; exit 1; }
 mkdir -p "$TARGET"
 rm -rf "$TARGET/delegate-coder"
-cp -r "$TMP/repo/skills/delegate-coder" "$TARGET/delegate-coder"
+cp -r "$TMP/repo/plugins/delegate-coder/skills/delegate-coder" "$TARGET/delegate-coder"
 chmod +x "$TARGET/delegate-coder/scripts/"*.sh
 echo "Installed. Open Claude Code and try: \"use the delegate worker to summarize this repo\""

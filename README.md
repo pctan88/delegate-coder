@@ -35,13 +35,26 @@ v2 adds several new config options: **model selection**, **enable/scope** guards
 
 ## Install
 
+### As a plugin (recommended)
+
+This repo is a Claude Code plugin marketplace. From inside Claude Code:
+
+```
+/plugin marketplace add pctan88/delegate-coder
+/plugin install delegate-coder@tan-tools
+```
+
+This installs the skill **and** the `/delegate-*` slash commands.
+
+### Manual (skill only)
+
 ```bash
 # Personal (all projects)
 git clone https://github.com/pctan88/delegate-coder.git
-cp -r delegate-coder/skills/delegate-coder ~/.claude/skills/
+cp -r delegate-coder/plugins/delegate-coder/skills/delegate-coder ~/.claude/skills/
 
 # Or per-project
-cp -r delegate-coder/skills/delegate-coder YOUR_PROJECT/.claude/skills/
+cp -r delegate-coder/plugins/delegate-coder/skills/delegate-coder YOUR_PROJECT/.claude/skills/
 ```
 
 Or use the install script:
@@ -59,7 +72,7 @@ curl -fsSL https://raw.githubusercontent.com/pctan88/delegate-coder/main/install
    or just work normally — the skill triggers when delegation fits the task.
 3. First run, Claude detects installed workers, asks which to use, and saves the choice to `.claude/delegate-coder.json`.
 
-Configuration details: [skills/delegate-coder/references/setup.md](skills/delegate-coder/references/setup.md)
+Configuration details: [setup.md](plugins/delegate-coder/skills/delegate-coder/references/setup.md)
 
 ## Does it actually save credits?
 
@@ -82,7 +95,7 @@ What we actually measured (mimo worker, commander.js, Claude Sonnet 4.6, n=3 —
 ## Privacy & safety notes
 
 - Free-tier workers (MiMo, Gemini) send your code to their provider's servers. Fine for personal/OSS work; check policy before using on employer code.
-- Read [references/setup.md](skills/delegate-coder/references/setup.md) before enabling auto-approval flags on any worker.
+- Read [setup.md](plugins/delegate-coder/skills/delegate-coder/references/setup.md) before enabling auto-approval flags on any worker.
 - All exec work lands on a `delegate/*` git branch — review the diff before merging, always.
 
 ## Related projects
