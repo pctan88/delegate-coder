@@ -78,3 +78,4 @@ For multi-step tasks, reuse the worker's session instead of re-feeding context. 
 
 - `references/adapters.md` — per-agent commands, read-only modes, session flags, permission settings. Read it when the delegate script fails, when setting up a new agent, or when you need agent-specific features.
 - `references/setup.md` — first-time setup: config file format, safe permission configuration (avoid blanket auto-approve), and how the user can add a custom agent. Read when configuring a project for the first time.
+- `references/models.md` — per-agent model options with cost/speed hints, used by `/delegate-setup` to let the user pick a `model`. The list drifts, so it always offers a custom-entry fallback.

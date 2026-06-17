@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "delegate-coder",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "source": "./plugins/delegate-coder",
       "description": "Delegate execution-heavy coding work (bulk reading, implementation, refactoring, first-pass review) to a cheaper CLI worker agent to save Claude usage."
     }
