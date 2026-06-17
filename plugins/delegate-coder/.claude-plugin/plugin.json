@@ -1,6 +1,6 @@
 {
   "name": "delegate-coder",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Delegate execution-heavy coding work (bulk reading, implementation, refactoring, first-pass review) to a cheaper CLI worker agent (MiMo, Aider, Codex, Gemini, Qwen, OpenCode) to save Claude usage. Claude plans and reviews; the worker reads code and writes first-pass implementations.",
   "author": {
     "name": "Tan",

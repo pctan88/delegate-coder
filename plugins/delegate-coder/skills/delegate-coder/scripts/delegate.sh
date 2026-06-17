@@ -59,7 +59,10 @@ log_event() { # log_event <event> [extra_fields]
   local ts
   ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
   local line="{\"ts\":\"$ts\",\"agent\":\"$AGENT\",\"model\":\"${MODEL}\",\"mode\":\"$MODE\",\"event\":\"$event\"${extra}}"
-  echo "$line" >> "$LOGFILE"
+  # Tolerate a missing .claude/ dir (e.g. worker run in a bare repo); never
+  # let a logging failure abort the delegation.
+  mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null || return 0
+  echo "$line" >> "$LOGFILE" 2>/dev/null || true
 }
 
 # Command override takes precedence
@@ -98,10 +101,10 @@ case "$AGENT" in
     args=(mimo run "$TASK" --format default --dangerously-skip-permissions --pure)
     [[ -n "$MODEL" ]] && args+=(--model "$MODEL")
     if [[ "$MODE" == "read" ]]; then
-      timeout 600 "${args[@]}" --agent plan || _exit=$?
+      timeout 600 "${args[@]}" --agent plan < /dev/null || _exit=$?
       echo "Done."
     else
-      timeout 600 "${args[@]}" || _exit=$?
+      timeout 600 "${args[@]}" < /dev/null || _exit=$?
       echo "Done."
     fi
     ;;
@@ -109,33 +112,37 @@ case "$AGENT" in
     args=(aider --message "$TASK" --yes)
     [[ -n "$MODEL" ]] && args+=(--model "$MODEL")
     if [[ "$MODE" == "read" ]]; then
-      "${args[@]}" --dry-run || _exit=$?
+      "${args[@]}" --dry-run < /dev/null || _exit=$?
     else
-      "${args[@]}" || _exit=$?
+      "${args[@]}" < /dev/null || _exit=$?
     fi
     ;;
   codex)
+    # codex exec reads stdin and blocks waiting for EOF even when the prompt is
+    # passed positionally; redirect from /dev/null so it never hangs in
+    # non-interactive (CI/background/agent) contexts. --full-auto is deprecated
+    # in codex 0.139.0 in favor of --sandbox workspace-write.
     args=(codex exec "$TASK")
     [[ -n "$MODEL" ]] && args+=(--model "$MODEL")
     if [[ "$MODE" == "read" ]]; then
-      "${args[@]}" --sandbox read-only || _exit=$?
+      "${args[@]}" --sandbox read-only < /dev/null || _exit=$?
     else
-      "${args[@]}" --full-auto || _exit=$?
+      "${args[@]}" --sandbox workspace-write < /dev/null || _exit=$?
     fi
     ;;
   gemini|qwen)
     args=("$AGENT" -p "$TASK")
     [[ -n "$MODEL" ]] && args+=(-m "$MODEL")
     if [[ "$MODE" == "read" ]]; then
-      "${args[@]}" || _exit=$?
+      "${args[@]}" < /dev/null || _exit=$?
     else
-      "${args[@]}" --yolo || _exit=$?
+      "${args[@]}" --yolo < /dev/null || _exit=$?
     fi
     ;;
   opencode)
     args=(opencode run "$TASK")
     [[ -n "$MODEL" ]] && args+=(--model "$MODEL")
-    "${args[@]}" || _exit=$?
+    "${args[@]}" < /dev/null || _exit=$?
     ;;
   *)
     echo "No built-in adapter for '$AGENT'." >&2
