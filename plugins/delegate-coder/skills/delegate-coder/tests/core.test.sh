@@ -13,7 +13,8 @@ mkdir -p "$TEST_ROOT/home"
 
 # The host may have a real worker installed. Keep the fixture's missing-agent
 # cases from finding or invoking it, while preserving the rest of the test
-# toolchain on PATH.
+# toolchain on PATH. Those cases also use a deliberately nonexistent agent
+# name rather than a real adapter name.
 REAL_CODEX="$(type -P codex 2>/dev/null || true)"
 REAL_CODEX_DIR="${REAL_CODEX%/*}"
 TEST_PATH=""
@@ -125,9 +126,8 @@ pass "command_override runs with {task} and bypasses adapter"
 setup_case strict
 mkdir -p "$CASE_DIR/.claude"
 cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
-{ "agent": "codex", "fallback": "strict" }
+{ "agent": "delegate_coder_missing_agent_9fd0d3", "fallback": "strict" }
 JSON
-rm -f "$CASE_DIR/bin/codex"   # agent no longer on PATH
 run_dispatch exec "do it" >/dev/null 2>"$CASE_DIR/err"; rc=$?
 [[ $rc -eq 4 ]] || fail "missing agent should exit 4 (got $rc)"
 contains "$CASE_DIR/err" "CRITICAL" "strict fallback should warn CRITICAL"
@@ -136,9 +136,8 @@ pass "missing agent + strict exits 4 with CRITICAL"
 setup_case graceful
 mkdir -p "$CASE_DIR/.claude"
 cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
-{ "agent": "codex", "fallback": "graceful" }
+{ "agent": "delegate_coder_missing_agent_9fd0d3", "fallback": "graceful" }
 JSON
-rm -f "$CASE_DIR/bin/codex"
 run_dispatch exec "do it" >/dev/null 2>"$CASE_DIR/err"; rc=$?
 [[ $rc -eq 4 ]] || fail "missing agent graceful should exit 4 (got $rc)"
 absent "$CASE_DIR/err" "CRITICAL" "graceful fallback must not print CRITICAL"

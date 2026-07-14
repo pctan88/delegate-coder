@@ -29,7 +29,7 @@ Before delegating, check `.claude/delegate-coder.json` for `enabled` and `scope`
 
 | Task type | Mode | Trust level |
 |---|---|---|
-| Read / understand / summarize codebase | `read` | Full trust (read-only, zero risk) |
+| Read / understand / summarize codebase | `read` | Full trust only when its adapter enforces read-only or dry-run behavior. Gemini, Qwen, and OpenCode do not enforce a zero-write guarantee, so use orchestration review and isolation. |
 | Code review of a diff or module | `read` | Full trust (output only) |
 | Implement / refactor / fix | `exec` | Verify with git + tests (Step 4) |
 
