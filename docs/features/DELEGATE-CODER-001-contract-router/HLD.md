@@ -13,7 +13,7 @@ Ollama, so the worker does not need a multi-turn tool loop.
 | Component | Responsibility |
 |---|---|
 | `delegate.sh` | Dispatch `contract` mode, isolate stdout report from stderr progress, and append audit start/end events |
-| `contract-router.sh` | Parse/validate contracts, prepare Ollama, generate, write atomically, test, retry once, and render the report |
+| `contract-router.sh` | Require Git/branch/clean-worktree preconditions, snapshot target, prepare Ollama, generate strict structured output, stage/verify/promote transactionally, retry once, and render attributable report |
 | Ollama `/api/generate` | Produce the complete updated file using the configured local model |
 | `contract-router.test.sh` | Exercise the router with fake Ollama/curl commands and deterministic fixtures |
 | `.claude/delegate-coder.log` | Store operational JSON events for `/delegate stats` and diagnosis |
@@ -27,13 +27,13 @@ contract JSON
   -> estimate complete prompt; reject if it exceeds num_ctx
   -> stop non-selected Ollama models
   -> POST /api/generate (single turn, full-file response)
-  -> reject done_reason=length; extract code fence; normalize newline
-  -> atomic target replacement
+  -> reject malformed/additional/empty output or done_reason=length
+  -> normalize exactly one trailing newline; stage candidate at target path
   -> timeout(test_command)
-       pass + changed  -> PASS
-       pass + unchanged -> NOOP
-       fail             -> one generation with exact failure log -> PASS or FAIL
-  -> target-only diff + final test log
+       pass + changed  -> promote candidate -> PASS
+       pass + unchanged -> restore -> NOOP
+       fail             -> one generation with exact failure log -> promote or restore
+  -> pre-contract target diff + metrics + final test log
   -> delegate.sh audit:end
 ```
 
@@ -43,10 +43,13 @@ contract JSON
   repository, and cannot be a symlink.
 - The parent directory must already exist; a missing target file is allowed for
   new-file contracts.
-- Writes use a temporary file in the target directory and `mv`, preserving the
-  existing mode where applicable.
-- The original file is snapshotted before generation and is not replaced when
-  generation is rejected.
+- The full worktree must be clean and execution must be on a named isolated
+  feature/delegate branch. Dirty targets are rejected.
+- The original file's existence, bytes, and mode are snapshotted before
+  generation. A candidate may occupy the target for verification, but promotion
+  happens only after success; all unsuccessful exits restore or remove it.
+- Structured JSON output is the only accepted transport; markdown/source fences
+  are ordinary UTF-8 content and are never parsed as transport delimiters.
 - The complete initial prompt is estimated before Ollama model eviction or an
   HTTP request; correction prompts are estimated again with the failure log.
 - Generation and tests have bounded timeouts. A failed test can trigger only
@@ -54,15 +57,15 @@ contract JSON
 
 ## Runtime configuration
 
-`DELEGATE_MODEL`, `DELEGATE_NUM_CTX`, `DELEGATE_KEEP_ALIVE`,
+`implementation_backend` (default `agent`), `DELEGATE_MODEL`, `DELEGATE_NUM_CTX`, `DELEGATE_KEEP_ALIVE`,
 `DELEGATE_CURL_TIMEOUT`, `DELEGATE_TEST_TIMEOUT`, and `OLLAMA_HOST` are
 environment-level controls. Defaults and semantics are defined in
 `API_CONTRACT.md`.
 
 ## Compatibility and benchmark boundary
 
-Contract mode is opt-in through `delegate.sh contract`; the existing `read` and
-`exec` adapter paths remain separate. Changes to the default headless delegation
+Contract mode is opt-in through configuration or `delegate.sh contract`; the
+existing `read` and default `exec` adapter paths remain separate. Changes to the default headless delegation
 path (`SKILL.md`, `detect.sh`, or `delegate.sh` behavior used by the benchmark)
 must be treated as benchmark-impacting *(confirm release process)*. Human-invoked
 router and documentation changes do not overwrite the v1 dataset.

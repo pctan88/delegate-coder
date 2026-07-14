@@ -111,6 +111,22 @@ run_dispatch read "understand" >/dev/null 2>&1 || fail "config-agent run failed"
 contains "$FAKE_ARGV" "--model gpt-x-mini" "model from config should reach worker argv"
 pass "agent + model resolved from config file"
 
+# The optional implementation backend preserves the normal agent default and
+# refuses non-contract input without silently falling back to a hosted worker.
+setup_case backenddefault
+DELEGATE_AGENT=codex run_dispatch exec "ordinary implementation task" >/dev/null 2>&1 || fail "default backend should preserve exec"
+contains "$FAKE_ARGV" "workspace-write" "default implementation backend should use agent exec"
+pass "default implementation backend preserves agent exec"
+
+setup_case backendcontract
+mkdir -p "$CASE_DIR/.claude"
+printf '%s\n' '{"implementation_backend":"contract"}' > "$CASE_DIR/.claude/delegate-coder.json"
+run_dispatch exec "ordinary implementation task" >/dev/null 2>"$CASE_DIR/err"; rc=$?
+[[ $rc -eq 2 ]] || fail "contract backend should reject non-contract input without fallback"
+contains "$CASE_DIR/err" "no hosted-agent fallback" "contract backend fallback policy"
+[[ ! -s "$FAKE_ARGV" ]] || fail "contract backend must not invoke the agent adapter"
+pass "contract backend is explicit and no-fallback"
+
 # ── delegate.sh: command_override bypasses adapter ────────────────────────
 setup_case override
 mkdir -p "$CASE_DIR/.claude"

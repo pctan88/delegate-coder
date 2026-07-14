@@ -17,7 +17,8 @@ contract is an object with exactly these required string fields:
 ```
 
 The top-level value may also be an array of contract objects. Items run
-sequentially in the current working tree and produce one aggregate report.
+sequentially in exact JSON-array order, stop after the first failed child, and
+produce one aggregate report with completed, failed, and skipped counts.
 Batch parsing requires `python3`; without it, an array is rejected rather than
 being misread by the single-contract fallback parser.
 
@@ -26,7 +27,7 @@ being misread by the single-contract fallback parser.
 | Field | Required | Semantics |
 |---|---:|---|
 | `target_file` | yes | Existing regular file, or new file whose parent exists; repository-relative and non-symlink |
-| `instructions` | yes | Functional edit request sent to the local worker |
+| `instructions` | yes | Functional request including external interfaces/signatures, invariants, dependency ordering, forbidden changes, and relevant context |
 | `test_command` | yes | Shell command run from the repository root after generation |
 
 Malformed JSON may use the deliberately limited field-extraction fallback. A
@@ -41,10 +42,11 @@ exceeds `num_ctx`, the contract is rejected up front with a non-zero exit and no
 request or file write, so an oversized file cannot be silently prompt-truncated.
 
 The router then sends `POST {OLLAMA_HOST}/api/generate` with `stream: false`, the
-configured model, compiler system prompt, `options.num_ctx`, and `keep_alive`.
-The model response must contain a non-empty `response`; the first fenced block
-is used when present. `done_reason: length` (output-side truncation) is a hard
-failure and never writes a file.
+configured model, compiler system prompt, `options.num_ctx`, `temperature: 0`,
+bounded `num_predict`, and `keep_alive`. The response must be JSON with exactly
+one non-empty string field, `updated_file`; malformed, additional, or empty
+fields fail. Markdown and source triple-backtick fences are preserved as file
+content. `done_reason: length` is a hard failure and never accepts a file.
 
 ## Output
 
@@ -56,6 +58,10 @@ Stdout is a markdown report. Progress and operational errors go to stderr.
 - Status: PASS | NOOP | FAIL
 - Retries: 0 or 1
 - Target: `relative/path`
+- Branch: isolated feature/delegate branch
+- Restored: `true | false`
+- Candidate accepted: `true | false`
+- Ollama metrics: `total_duration`, `load_duration`, `prompt_eval_count`, `prompt_eval_duration`, `eval_count`, `eval_duration`
 
 ## Git diff
 ...
@@ -66,8 +72,9 @@ Stdout is a markdown report. Progress and operational errors go to stderr.
 
 Exit status is zero for `PASS` and `NOOP`, non-zero for `FAIL` or setup/
 generation errors. A batch report is `PASS` when every child is `PASS` or
-`NOOP`, otherwise `FAIL`; its retry count is the sum of child retries. The
-dispatcher audits that aggregate status.
+`NOOP`, otherwise `FAIL`; it reports completed, failed, and skipped counts and
+its retry count is the sum of child retries. The diff compares the pre-contract
+snapshot to the accepted candidate; outside-target changes fail.
 
 ## Environment defaults
 
@@ -80,6 +87,11 @@ dispatcher audits that aggregate status.
 | `DELEGATE_CURL_TIMEOUT` | `600` seconds |
 | `DELEGATE_TEST_TIMEOUT` | `300` seconds |
 
+All numeric limits are strictly positive. Verification must use `timeout`,
+`gtimeout`, `perl`, or another bounded mechanism; unbounded tests are not run.
+Loopback hosts force curl proxy bypass with `--noproxy '*'`; explicitly remote
+hosts retain normal proxy behavior and are a privacy boundary.
+
 The no-off-machine privacy claim applies only when `OLLAMA_HOST` remains at its
 default loopback value. The router intentionally permits an `OLLAMA_HOST`
 override; when it points to another machine or service, prompt contents are sent
@@ -87,6 +99,7 @@ there and that endpoint's privacy policy applies.
 
 ## Audit event
 
-`delegate.sh` appends JSON start/end events containing agent, model, mode,
-duration, exit code, status, and retries. This is local operational telemetry,
-not a durable task database.
+`delegate.sh` appends valid JSON start/end events containing agent, model, mode,
+duration, exit code, status, retries, restoration state, branch, errors, and
+all six Ollama metrics. This is local operational telemetry, not a durable task
+database.

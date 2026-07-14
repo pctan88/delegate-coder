@@ -19,7 +19,7 @@ This is not just a CLI wrapper. The skill encodes a **trust framework** for dele
 
 ## Experimental (v2)
 
-v2 adds several new config options: **model selection**, **enable/scope** guards, **strict/graceful fallback**, and a **path allowlist**. These all default to off or prior behavior, so existing setups are unaffected. However, **none of these features have been benchmarked or unit-tested yet** — the benchmark results below reflect v1 behavior only. Treat them as opt-in and report issues.
+v2 adds several new config options: **model selection**, **enable/scope** guards, **strict/graceful fallback**, and a **path allowlist**. These all default to off or prior behavior, so existing setups are unaffected. The v2 routing and contract paths have deterministic unit coverage. Local-Qwen performance is still unproven until the paired local benchmark is run; the frozen benchmark results below are historical Claude+MiMo v1 evidence and do not measure Qwen.
 
 ## Supported worker agents
 
@@ -91,6 +91,53 @@ decomposed into bounded sequential contracts, and each decision log is the
 append-only record of design changes. Both features are single-repository, so no
 cross-repo plan is included.
 
+## Local Qwen behind Claude or Codex
+
+Raw contract mode is designed to avoid repeated heavy-harness prefill by sending one bounded full-file request to local Ollama/Qwen. It is not yet proven faster: run the new paired local benchmark before making performance claims.
+
+Claude or Codex remains responsible for planning, dependency analysis, architecture, security review, malformed-input boundaries, cumulative diff review, and final acceptance. Contract mode is eligible for a bounded single-file implementation/refactor when the orchestrator can provide complete constraints and an objective test. Exploration, architecture, authentication/security work, ambiguous changes, repository-wide reasoning, and critical invariant decisions stay on the normal agent/native path.
+
+Contract mode requires a clean worktree and an isolated feature/delegate branch before the first write, and it never silently falls back to a hosted provider. Explicitly ordered multi-file work must be decomposed into one contract per file and run sequentially, stopping on the first failure.
+
+Use the opt-in backend configuration:
+
+```json
+{
+  "implementation_backend": "agent",
+  "contract": {
+    "model": "qwen3-coder:30b",
+    "num_ctx": 32768,
+    "keep_alive": "30m",
+    "curl_timeout": 600,
+    "test_timeout": 300
+  }
+}
+```
+
+The absent/default `agent` value preserves the existing `read`/`exec` behavior. Set it to `contract` only for JSON Task Contracts. Each contract's instructions must include external interfaces, signatures, invariants, dependency ordering, forbidden changes, and the exact test command.
+
+### Orchestrator prompt
+
+```text
+Use delegate-coder with the local contract backend for eligible implementation work.
+
+You remain responsible for architecture, cross-file reasoning, dependency ordering, security-sensitive decisions, and final acceptance.
+
+Before delegating:
+1. Create or use an isolated feature/delegate branch and confirm the target is clean.
+2. Inspect the repository and identify the exact files and dependency order.
+3. For each file, write one complete Task Contract containing:
+   - the single target file;
+   - precise required behavior;
+   - relevant external interfaces and invariants;
+   - forbidden changes;
+   - an objective targeted verification command.
+4. Run contracts sequentially and stop immediately on FAIL.
+5. Never trust the worker summary alone.
+6. After all contracts pass, inspect the cumulative diff and run the full repository test/lint/typecheck suite.
+7. Keep authentication, security, malformed-input boundaries, and critical invariants under your own review.
+```
+
 ## Contract mode (local Ollama)
 
 For a strict, low-token edit, send `delegate.sh` a Task Contract instead of a chat prompt. Keep contracts single-file and sequential: a three-file feature should be three contracts, never one exploratory multi-file request.
@@ -109,17 +156,17 @@ Run it from the target repository with:
 bash path/to/delegate.sh contract '{"target_file":"src/file.ts","instructions":"...","test_command":"npm test -- src/file.spec.ts"}'
 ```
 
-The JSON may also be piped on stdin. Contract mode uses the local Ollama HTTP API with `qwen3-coder:30b`, preflights the complete prompt against `num_ctx`, stops other resident Ollama models only after that guard passes, replaces only the declared regular file, and runs the supplied test command. A failing test gets exactly one correction attempt. Standard output is a markdown report containing the final status, the target-only `git diff`, and the final test log; progress and errors go to stderr. With the default `OLLAMA_HOST` (`http://127.0.0.1:11434`), file contents stay on the machine; an override sends them to that endpoint. Ollama must be installed and serving the configured host. The existing `read` and `exec` chat-agent modes remain supported.
+The JSON may also be piped on stdin. Contract mode uses Ollama structured output with a strict `{updated_file}` schema and deterministic temperature `0`; it preflights prompt plus expected full-file output against `num_ctx`, stops other resident Ollama models, snapshots and transactionally stages only the declared regular file, and runs the supplied bounded test command. A failing test gets exactly one correction attempt; parser failures, truncation, timeout, signal, outside-target changes, and final test failures restore the worktree. Standard output is a markdown report containing status, restoration state, Ollama timing metrics, the pre-contract target-only diff, and the final test log; progress goes to stderr. With the default `OLLAMA_HOST` (`http://127.0.0.1:11434`), file contents stay on the machine; an explicitly remote override preserves normal proxy behavior and is a privacy boundary. Ollama must be installed and serving the configured host. The existing `read` and default `exec` chat-agent modes remain supported.
 
 Set `DELEGATE_MODEL` to select another local Ollama model, `DELEGATE_NUM_CTX` to change the context limit (default `32768`), `DELEGATE_CURL_TIMEOUT`/`DELEGATE_TEST_TIMEOUT` for timeouts, and `DELEGATE_KEEP_ALIVE` for model retention (default `30m`). If the model produces no change, the report says `NOOP`; if it reports `done_reason: length`, the file is not replaced. A top-level JSON array runs contracts sequentially and returns one combined report with aggregate retries.
 
-Runs through `delegate.sh` also append start/end events, status, duration, and retries to `.claude/delegate-coder.log`, so `/delegate stats` includes contract executions.
+Runs through `delegate.sh` also append valid JSON start/end events, status, duration, retries, restoration state, and Ollama timing metrics to `.claude/delegate-coder.log`, so `/delegate stats` includes contract executions.
 
 ## Does it actually save credits?
 
 This repo includes a [benchmark harness](benchmark/) that measures it properly: paired A/B runs (with/without the skill), real cost numbers from Claude Code's own JSON output, and objective pass/fail verification per task.
 
-What we actually measured (mimo worker, commander.js, Claude Sonnet 4.6, n=3 — see [full results](benchmark/RESULTS.md)): installing the skill gave a **~11% reduction in cost per successful task** ($0.493 → $0.440), but the result is uneven and should be read as directional, not conclusive. The savings come from **heavy implementation/refactor tasks** when delegation actually fires (e.g. a cross-file feature −37%). **Bulk codebase reading was a loss** with this worker — ~20% costlier and ~3× slower — so despite the intuition, offloading large reads to mimo did not pay off. Review was inconclusive. Run the benchmark on your own repo before trusting any number, including ours.
+What we actually measured (MiMo worker, commander.js, Claude Sonnet 4.6, n=3 — see [full results](benchmark/RESULTS.md)): installing the skill gave a **~11% reduction in cost per successful task** ($0.493 → $0.440), but the result is uneven and should be read as directional, not conclusive. The savings come from **heavy implementation/refactor tasks** when delegation actually fires (e.g. a cross-file feature −37%). **Bulk codebase reading was a loss** with this worker — ~20% costlier and ~3× slower — so offloading large reads to MiMo did not pay off in the published evidence. Review was inconclusive. This historical Claude+MiMo v1 dataset is unrelated to local-Qwen performance; run the additive paired benchmark before trusting any local number.
 
 **Note on triggering:** with natural, unmodified prompts the skill delegates *selectively* — readily for heavy reads, reluctantly for small implementation/refactor/review tasks (overall it fired in ~42% of eligible runs), and it correctly declines trivial one-line tasks. Getting it to trigger at all required leading the skill description with task types and stating that installing it implies intent to delegate; see RESULTS.md for the before/after wording. Triggering reliability on execution tasks is the main open item for v2.
 

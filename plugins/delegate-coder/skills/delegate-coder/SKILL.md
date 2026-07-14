@@ -27,11 +27,12 @@ Before delegating, check `.claude/delegate-coder.json` for `enabled` and `scope`
 
 ## Step 2: Choose the task mode
 
-| Task type | Mode | Trust level |
+| Task type | Preferred backend | Mode / trust boundary |
 |---|---|---|
-| Read / understand / summarize codebase | `read` | Full trust only when its adapter enforces read-only or dry-run behavior. Gemini, Qwen, and OpenCode do not enforce a zero-write guarantee, so use orchestration review and isolation. |
-| Code review of a diff or module | `read` | Trusted only with an enforcing read-only or dry-run adapter; Gemini, Qwen, and OpenCode require orchestration review and isolation. |
-| Implement / refactor / fix | `exec` | Verify with git + tests (Step 4) |
+| Explore, understand, summarize, or review a repository/diff | normal agent/native path | `read`; preserve read-only/dry-run controls and orchestrator review |
+| Bounded single-file implementation/refactor with complete constraints and an objective test | opt-in local `contract` | one Task Contract; clean isolated branch, transactional worker, targeted test, then orchestrator diff/full-suite acceptance |
+| Explicitly ordered multi-file implementation | opt-in local `contract` | decompose into one contract per file, run sequentially in dependency order, stop on the first failure |
+| Architecture, repository-wide reasoning, authentication/security, malformed-input boundaries, or ambiguous edits | normal agent/native path | `exec` or native implementation; do not route to local contract |
 
 Anything ambiguous, architecture-defining, or security-sensitive: do it yourself instead of delegating.
 
@@ -70,16 +71,20 @@ Read the full `git diff` only when: the changeset is large (>5 files), it touche
 
 If the worker fails the same task **twice**, stop delegating it. Either rewrite the spec to be more explicit (a spec problem) or implement it yourself (a capability problem). Never enter a third retry — retry loops silently destroy the token savings this skill exists for.
 
-### Contract mode
+### Contract mode / local Qwen backend
 
-For a bounded local single-file edit, use the contract router instead of a chat-agent mode. Decompose multi-file work into one contract per file and run those contracts sequentially; do not send an exploratory multi-file task to the full-file worker.
+For an eligible bounded local single-file edit, use the contract router instead of a chat-agent mode only when the orchestrator can state complete constraints and an objective test. Contract mode is opt-in through `implementation_backend: "contract"` or the explicit command below; the absent/default backend remains the existing agent path. It is designed to avoid repeated heavy-harness prefill, but fresh paired measurements are required before claiming it is faster.
+
+Before the first write, create or use an isolated feature/delegate branch and confirm the worktree and every target are clean. Decompose explicitly ordered multi-file work into one contract per file and run those contracts sequentially; do not send an exploratory multi-file task to the full-file worker. Stop immediately on `FAIL`. Prior successful children may remain on the isolated branch, but a failed child is restored transactionally.
 
 ```bash
 bash scripts/delegate.sh contract '<json contract>'
 # or: printf '%s' '<json contract>' | bash scripts/delegate.sh contract
 ```
 
-The contract must contain string fields named `target_file`, `instructions`, and `test_command`. A top-level array of these objects is also accepted for sequential batches. The router validates that the target is an in-repository regular file or a new file whose parent already exists, prepares the local Ollama process environment, asks `qwen3-coder:30b` (or `DELEGATE_MODEL`) for a complete replacement through `/api/generate`, and runs the supplied test command with bounded timeouts. It makes one correction generation after a failed test, never more than one. Context truncation is rejected, unchanged output is reported as `NOOP`, and the report includes retries, target-only diff(s), and final test log(s) on stdout; operational progress is sent to stderr. This mode requires a local Ollama server. The existing `read` and `exec` adapters are unchanged.
+The contract must contain string fields named `target_file`, `instructions`, and `test_command`. `instructions` must include the target's external interfaces and signatures, invariants, dependency ordering/context, forbidden changes, and the exact test command. A top-level array of these objects is also accepted for sequential batches. The router validates that the target is an in-repository regular file or a new file whose parent already exists, prepares the local Ollama process environment, asks `qwen3-coder:30b` (or configured local model) for a complete replacement through structured `/api/generate` output, and runs the supplied test command with bounded timeouts. It makes one correction generation after a failed test, never more than one. Context truncation is rejected, unchanged output is reported as `NOOP`, failures restore the target, and the report includes restoration state, batch counts, Ollama timing metrics, a pre-contract target-only diff, and final test log(s) on stdout; operational progress is sent to stderr. This mode requires a local Ollama server and never silently falls back to a hosted provider. The existing `read` and default `exec` adapters are unchanged.
+
+After all contracts pass, inspect the cumulative diff from the pre-contract worktree and run the full repository test/lint/typecheck command. Keep security-sensitive decisions, critical invariants, and final acceptance under orchestrator review.
 
 ## Session continuity
 

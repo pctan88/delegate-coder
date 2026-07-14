@@ -20,15 +20,19 @@ acceptance evidence for future maintenance.
 - `plugins/delegate-coder/skills/delegate-coder/scripts/contract-router.sh`
 - `plugins/delegate-coder/skills/delegate-coder/tests/contract-router.test.sh`
 - Related README, skill, adapter, setup, and benchmark guidance
+- `benchmark/run_local_contract.sh`, `benchmark/local_contract_report.py`, and
+  deterministic reporter fixtures
 
 ## Ordered maintenance workflow
 
 1. Confirm whether the requested change is contract mode, existing `read`/`exec`
    mode, or documentation only.
-2. For contract mode, keep one target file per contract and preserve the input,
-   output, timeout, and retry semantics in `API_CONTRACT.md`.
+2. For contract mode, require a clean isolated branch, keep one target file per
+   contract, snapshot bytes/mode/existence, and preserve the structured input,
+   output, timeout, rollback, and retry semantics in `API_CONTRACT.md`.
 3. Add or update deterministic fake-Ollama tests before changing router behavior.
-4. Run the contract-router test suite and `git diff --check`.
+4. Run the contract-router suite, core suite, deterministic benchmark reporter
+   tests, and `git diff --check`.
 5. Review target scope, audit output, and benchmark impact. Do not overwrite
    `benchmark/RESULTS.md` or rerun the frozen v1 matrix.
 6. Append a decision-log entry when behavior, safety boundaries, or benchmark
@@ -40,4 +44,8 @@ acceptance evidence for future maintenance.
   `(confirm)`.
 - Existing adapters remain compatible.
 - Reports keep stdout machine/cloud-consumable and stderr operational.
+- Failed candidates never remain in the worktree; reports include restoration,
+  attributable pre-contract diff, batch counts, and Ollama metrics.
+- The local benchmark is additive, five-warm, and never modifies the frozen v1
+  results or raw data.
 - No unrelated files or benchmark artifacts are changed.

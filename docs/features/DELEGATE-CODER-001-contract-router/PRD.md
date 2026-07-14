@@ -20,9 +20,11 @@ needs a small, deterministic execution unit with an objective result.
 ## User flow
 
 The orchestrator submits a JSON Task Contract. `delegate-coder` validates the
-target, prepares Ollama, asks the local model for a complete file replacement,
-runs the supplied verification command, retries once with the exact failure log
-if needed, and returns status, target-only diff, and final test output.
+target and clean isolated branch, snapshots it, prepares Ollama, asks the local
+model for a complete structured file replacement, verifies a staged candidate,
+restores unsuccessful work transactionally, retries once with the exact failure
+log if needed, and returns status, restoration state, attributable diff, model
+metrics, and final test output.
 
 With the default `OLLAMA_HOST` (`http://127.0.0.1:11434`), generation runs
 against a loopback Ollama server, so file contents stay on the machine. If
@@ -37,12 +39,20 @@ send code to a third-party provider.
 - Support `target_file`, `instructions`, and `test_command` with a lightweight
   fallback for damaged JSON.
 - Use raw Ollama `/api/generate` with a compiler-style system prompt.
+- Require structured `{updated_file}` output with no extra fields, deterministic
+  temperature `0`, UTF-8 preservation, and exactly one trailing newline.
 - Stop resident Ollama models other than the selected model before generation.
-- Enforce repository-relative, non-symlink target boundaries and atomic writes.
+- Require a Git worktree, clean target/worktree, and isolated feature/delegate
+  branch; enforce repository-relative, non-symlink target boundaries.
+- Stage candidates on the target path for tests, promote only after success, and
+  restore existing content/mode or remove new files on every failure.
 - Apply newline normalization, context truncation protection, bounded generation
   and test timeouts, one correction retry, and explicit `NOOP` status.
 - Record contract start/end status, duration, model, exit code, and retries in
   the existing audit log.
+- Capture all Ollama timing/token counters and detect changes outside the target.
+- Provide an additive five-warm-repetition local benchmark and deterministic
+  reporter fixtures; preserve the historical Claude+MiMo v1 data.
 - Document the contract protocol and verify it with deterministic shell tests.
 
 ## Out of scope
@@ -56,7 +66,7 @@ send code to a third-party provider.
 ## Acceptance criteria
 
 1. Valid contracts produce a clean markdown report with `PASS`, target-only
-   diff, and final test log.
+   pre-contract diff, restoration state, Ollama metrics, and final test log.
 2. Invalid, traversal, outside-repository, symlink, or non-regular targets are
    rejected before Ollama is contacted.
 3. The selected `DELEGATE_MODEL`, `DELEGATE_NUM_CTX`, and `DELEGATE_KEEP_ALIVE`
@@ -68,9 +78,11 @@ send code to a third-party provider.
    current file and exact terminal output; a second failure returns `FAIL`.
 6. An unchanged passing result returns `NOOP`, not `PASS`.
 7. Test commands and generation requests are bounded by configurable timeouts.
-8. Sequential batches, new files in an existing directory, GPU cleanup, newline
-   normalization, and audit logging are covered by tests.
-9. Existing adapter behavior and the published v1 benchmark remain protected.
+8. Sequential batches preserve JSON order for at least 100 items, stop after the
+   first failure, and report completed/failed/skipped counts.
+9. New files, GPU cleanup, newline normalization, proxy behavior, UTF-8/fence
+   preservation, malformed output, and audit logging are covered by tests.
+10. Existing adapter behavior and the published v1 benchmark remain protected.
 
 ## Dependencies and risks
 

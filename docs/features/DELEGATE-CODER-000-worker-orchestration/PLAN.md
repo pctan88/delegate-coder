@@ -31,11 +31,13 @@ maintenance.
    or documentation only.
 2. If it touches `SKILL.md`, `detect.sh`, or the benchmarked `delegate.sh`
    invocation, treat it as benchmark-impacting (see `TEST_PLAN.md`).
-3. Keep every new config field optional and defaulted to current behavior.
+3. Keep every new config field optional and defaulted to current behavior;
+   `implementation_backend` defaults to `agent`, while local `contract` is an
+   explicit JSON-only backend with no silent hosted fallback.
 4. Add or update deterministic tests (fake worker on `PATH`, temp fixtures)
    before changing script behavior.
-5. Run `bash plugins/delegate-coder/skills/delegate-coder/tests/core.test.sh` and
-   `git diff --check`; inspect diff scope.
+5. Run the core and contract-router suites, deterministic benchmark reporter
+   tests, and `git diff --check`; inspect diff scope.
 6. Do not overwrite `benchmark/RESULTS.md` or rerun the frozen v1 matrix.
 7. Append a `DECISION_LOG.md` entry when behavior, safety boundaries, adapters,
    or benchmark policy change.

@@ -9,6 +9,10 @@
 - [ ] Existing `read`/`exec` adapters remain available.
 - [ ] README and `SKILL.md` explain one-file contracts and sequential
       decomposition for multi-file work.
+- [ ] Backend configuration defaults to `agent`; contract mode is explicitly
+      opt-in and setup exposes the choice without hosted fallback.
+- [ ] Contract instructions require interfaces/signatures, invariants,
+      dependency ordering, forbidden changes, and an objective test.
 - [ ] Local Ollama prerequisites and provider/privacy implications are documented.
 - [ ] Historical decisions are reviewed; unresolved items remain `(confirm)`.
 
@@ -21,10 +25,14 @@
 - [ ] Confirm `.claude/delegate-coder.log` start/end events contain status and
       retry count.
 - [ ] Confirm timeout and truncation failures leave the target safe.
+- [ ] Confirm malformed output, signals, outside-target changes, and failed
+      new-file contracts restore safely and report `Restored`.
 
 ## Benchmark and rollback
 
 - [ ] Do not overwrite the frozen v1 benchmark dataset.
+- [ ] Run deterministic local benchmark reporter tests; fresh local paired
+      measurements use five warm repetitions and a separate output directory.
 - [ ] If default-path behavior changes, create a new labeled benchmark dataset
       and obtain approval *(confirm process)*.
 - [ ] Rollback is a Git revert of the contract-router/dispatcher/docs change;

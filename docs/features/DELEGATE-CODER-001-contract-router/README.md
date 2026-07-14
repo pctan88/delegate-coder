@@ -9,14 +9,17 @@ against a loopback Ollama model, so code stays on the machine. If
 `OLLAMA_HOST` is overridden, file contents are sent to that endpoint and its
 privacy properties apply; this is unlike hosted chat-agent workers by default.
 
-This feature layers on the foundational worker orchestration documented in
+Raw contract mode is designed to avoid repeated heavy-harness prefill, but no
+speed claim is valid until the additive paired local benchmark is run. Claude
+or Codex retains planning, dependency analysis, security review, cumulative
+diff review, and final acceptance. This feature layers on the foundational worker orchestration documented in
 [DELEGATE-CODER-000](../DELEGATE-CODER-000-worker-orchestration/README.md); the
 default `read`/`exec` adapters and benchmark policy are recorded there.
 
 | | |
 |---|---|
 | **Feature** | DELEGATE-CODER-001 — contract-driven local Qwen worker |
-| **Status** | Implemented; initial router in `f88aa20`, follow-up hardening in `0c70396` and `b620adb` |
+| **Status** | Implemented; transactional/structured-output hardening in progress on the feature branch |
 | **Repository** | `delegate-coder` — plugin marketplace plus benchmark harness |
 | **Source implementation** | `f88aa20` (initial router), `0c70396` (review nits), `b620adb` (prompt preflight/privacy correction) |
 | **Cross-repo work** | Not applicable; the router and its tests are contained here |
@@ -31,7 +34,10 @@ default `read`/`exec` adapters and benchmark policy are recorded there.
 An implementation agent should read `PRD.md`, `HLD.md`, `API_CONTRACT.md`,
 `PLAN.md`, and `TEST_PLAN.md` before editing. Keep each contract bounded to one
 file, use the contract router only when the file can be safely replaced in
-full, and return the target-only diff plus test log to the orchestrator.
+full, and return the target-only diff plus test log to the orchestrator. The
+worktree must be clean on an isolated feature/delegate branch before the first
+write; exploration, architecture, authentication/security, malformed-input
+boundaries, and repository-wide reasoning stay on the normal agent path.
 
 ## Current gates
 
@@ -40,7 +46,10 @@ full, and return the target-only diff plus test log to the orchestrator.
 - The router must reject an estimated oversized prompt before model eviction or
   an HTTP request; output-side `done_reason: length` remains a separate guard.
 - Contract-router tests must pass, including retry, timeout, truncation,
-  no-op, new-file, batch, and path-boundary cases.
+  no-op, new-file, transactional rollback, strict structured output, ordered
+  batch stop-on-failure, proxy, positive-limit, non-Git, and path-boundary cases.
+- The additive local benchmark must use five warm repetitions and never write
+  the frozen v1 `benchmark/RESULTS.md` or `benchmark/raw_data.jsonl`.
 - The frozen v1 benchmark must remain unchanged. Any benchmark-impacting
   default-path change requires a separately labeled dataset *(confirm owner and
   process)*.

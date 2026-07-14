@@ -11,18 +11,111 @@ export PATH="$EXTRA_PATHS:$COMMON_DIRS:$PATH"
 MODE="${1:-}"
 TASK="${2:-}"
 CONFIG=".claude/delegate-coder.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+config_get() {
+  local path="$1"
+  [[ -f "$CONFIG" ]] || return 0
+  if command -v jq >/dev/null 2>&1; then
+    jq -r ".${path} // empty" "$CONFIG" 2>/dev/null
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 - "$CONFIG" "$path" <<'PY'
+import json
+import pathlib
+import sys
+try:
+    value = json.loads(pathlib.Path(sys.argv[1]).read_text())
+    for part in sys.argv[2].split('.'):
+        value = value.get(part) if isinstance(value, dict) else None
+        if value is None:
+            break
+    if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+        print(value)
+except Exception:
+    pass
+PY
+  fi
+}
+
+append_json_event() {
+  local logfile="$1" agent="$2" model="$3" mode="$4" event="$5"
+  shift 5
+  mkdir -p "$(dirname "$logfile")" 2>/dev/null || return 0
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$logfile" "$agent" "$model" "$mode" "$event" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$@" <<'PY'
+import json
+import pathlib
+import sys
+record = {
+    "ts": sys.argv[6],
+    "agent": sys.argv[2],
+    "model": sys.argv[3],
+    "mode": sys.argv[4],
+    "event": sys.argv[5],
+}
+extra = sys.argv[7:]
+for index in range(0, len(extra), 2):
+    key, value = extra[index:index + 2]
+    if key in {"duration_s", "exit_code", "retries", "total_duration", "load_duration", "prompt_eval_count", "prompt_eval_duration", "eval_count", "eval_duration"}:
+        try:
+            record[key] = int(value)
+        except ValueError:
+            try:
+                record[key] = float(value)
+            except ValueError:
+                record[key] = None if value == "None" else value
+    elif key == "restored":
+        record[key] = value == "true"
+    else:
+        record[key] = value
+with pathlib.Path(sys.argv[1]).open("a") as output:
+    output.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+PY
+  elif command -v jq >/dev/null 2>&1; then
+    jq -n --arg ts "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" --arg agent "$agent" --arg model "$model" --arg mode "$mode" --arg event "$event" \
+      '{ts:$ts,agent:$agent,model:$model,mode:$mode,event:$event}' >> "$logfile"
+  fi
+}
+
+prepare_contract_entry() {
+  local root branch dirty
+  root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "contract mode requires a Git worktree" >&2; return 1; }
+  [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] || { echo "contract mode requires a Git worktree" >&2; return 1; }
+  branch="$(git branch --show-current 2>/dev/null)"
+  [[ -n "$branch" ]] || { echo "contract mode requires a named feature/delegate branch" >&2; return 1; }
+  if [[ "$branch" == main || "$branch" == master || "$branch" == develop || "$branch" == trunk ]]; then
+    branch="${DELEGATE_CONTRACT_BRANCH:-delegate/contract-$(date +%Y%m%d-%H%M%S)-$$}"
+    git switch -c "$branch" >/dev/null 2>&1 || { echo "could not create isolated contract branch: $branch" >&2; return 1; }
+  fi
+  dirty="$(git status --porcelain --untracked-files=all)"
+  [[ -z "$dirty" ]] || { echo "contract mode requires a clean worktree before the first write" >&2; return 1; }
+  CONTRACT_BRANCH="$branch"
+}
+
+report_value() {
+  sed -n "s/^- $1: //p" "$2" | head -n1
+}
 
 # Contract mode is intentionally independent of the configured chat worker.
 # It reads stdin when the JSON argument is omitted.
 if [[ "$MODE" == "contract" ]]; then
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  prepare_contract_entry || exit 1
   CONTRACT_LOGFILE=".claude/delegate-coder.log"
-  CONTRACT_MODEL="${DELEGATE_MODEL:-qwen3-coder:30b}"
+  CONTRACT_MODEL="${DELEGATE_MODEL:-$(config_get contract.model)}"
+  CONTRACT_MODEL="${CONTRACT_MODEL:-qwen3-coder:30b}"
+  CONTRACT_NUM_CTX="${DELEGATE_NUM_CTX:-$(config_get contract.num_ctx)}"
+  CONTRACT_NUM_CTX="${CONTRACT_NUM_CTX:-32768}"
+  CONTRACT_KEEP_ALIVE="${DELEGATE_KEEP_ALIVE:-$(config_get contract.keep_alive)}"
+  CONTRACT_KEEP_ALIVE="${CONTRACT_KEEP_ALIVE:-30m}"
+  CONTRACT_CURL_TIMEOUT="${DELEGATE_CURL_TIMEOUT:-$(config_get contract.curl_timeout)}"
+  CONTRACT_CURL_TIMEOUT="${CONTRACT_CURL_TIMEOUT:-600}"
+  CONTRACT_TEST_TIMEOUT="${DELEGATE_TEST_TIMEOUT:-$(config_get contract.test_timeout)}"
+  CONTRACT_TEST_TIMEOUT="${CONTRACT_TEST_TIMEOUT:-300}"
   CONTRACT_T0="$(date +%s)"
-  mkdir -p "$(dirname "$CONTRACT_LOGFILE")" 2>/dev/null || true
-  printf '{"ts":"%s","agent":"local-ollama","model":"%s","mode":"contract","event":"start"}\n' \
-    "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$CONTRACT_MODEL" >> "$CONTRACT_LOGFILE" 2>/dev/null || true
+  export DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+  append_json_event "$CONTRACT_LOGFILE" local-ollama "$CONTRACT_MODEL" contract start branch "$CONTRACT_BRANCH"
   CONTRACT_REPORT="$(mktemp "${TMPDIR:-/tmp}/delegate-coder-report.XXXXXX")" || exit 1
+  export DELEGATE_MODEL="$CONTRACT_MODEL" DELEGATE_NUM_CTX="$CONTRACT_NUM_CTX" DELEGATE_KEEP_ALIVE="$CONTRACT_KEEP_ALIVE" DELEGATE_CURL_TIMEOUT="$CONTRACT_CURL_TIMEOUT" DELEGATE_TEST_TIMEOUT="$CONTRACT_TEST_TIMEOUT" DELEGATE_CONTRACT_PREPARED=1 DELEGATE_CONTRACT_BRANCH="$CONTRACT_BRANCH"
   if [[ $# -ge 2 ]]; then
     "$SCRIPT_DIR/contract-router.sh" "$TASK" > "$CONTRACT_REPORT"
   else
@@ -30,17 +123,20 @@ if [[ "$MODE" == "contract" ]]; then
   fi
   CONTRACT_EXIT=$?
   cat "$CONTRACT_REPORT"
-  CONTRACT_STATUS="$(sed -n 's/^- Status: //p' "$CONTRACT_REPORT" | head -n1)"
+  CONTRACT_STATUS="$(report_value Status "$CONTRACT_REPORT")"
   case "$CONTRACT_STATUS" in
     PASS|NOOP|FAIL) ;;
     *) CONTRACT_STATUS="ERROR" ;;
   esac
-  CONTRACT_RETRIES=0
-  CONTRACT_RETRIES="$(sed -n 's/^- Retries: //p' "$CONTRACT_REPORT" | head -n1)"
+  CONTRACT_RETRIES="$(report_value Retries "$CONTRACT_REPORT")"
   [[ -n "$CONTRACT_RETRIES" ]] || CONTRACT_RETRIES=0
+  CONTRACT_RESTORED="$(report_value Restored "$CONTRACT_REPORT")"
+  CONTRACT_ERROR="$(report_value Error "$CONTRACT_REPORT")"
+  CONTRACT_BRANCH="$(report_value Branch "$CONTRACT_REPORT")"
+  append_json_event "$CONTRACT_LOGFILE" local-ollama "$CONTRACT_MODEL" contract end \
+    duration_s "$(( $(date +%s) - CONTRACT_T0 ))" exit_code "$CONTRACT_EXIT" status "$CONTRACT_STATUS" retries "$CONTRACT_RETRIES" restored "${CONTRACT_RESTORED:-false}" branch "${CONTRACT_BRANCH:-$CONTRACT_BRANCH}" error "$CONTRACT_ERROR" \
+    total_duration "$(report_value 'Ollama total_duration' "$CONTRACT_REPORT")" load_duration "$(report_value 'Ollama load_duration' "$CONTRACT_REPORT")" prompt_eval_count "$(report_value 'Ollama prompt_eval_count' "$CONTRACT_REPORT")" prompt_eval_duration "$(report_value 'Ollama prompt_eval_duration' "$CONTRACT_REPORT")" eval_count "$(report_value 'Ollama eval_count' "$CONTRACT_REPORT")" eval_duration "$(report_value 'Ollama eval_duration' "$CONTRACT_REPORT")"
   rm -f "$CONTRACT_REPORT"
-  printf '{"ts":"%s","agent":"local-ollama","model":"%s","mode":"contract","event":"end","duration_s":%s,"exit_code":%s,"status":"%s","retries":%s}\n' \
-    "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$CONTRACT_MODEL" "$(( $(date +%s) - CONTRACT_T0 ))" "$CONTRACT_EXIT" "$CONTRACT_STATUS" "$CONTRACT_RETRIES" >> "$CONTRACT_LOGFILE" 2>/dev/null || true
   exit "$CONTRACT_EXIT"
 fi
 
@@ -53,6 +149,25 @@ if [[ "$MODE" != "read" && "$MODE" != "exec" ]]; then
   echo "Mode must be 'read' or 'exec', got: $MODE" >&2
   exit 2
 fi
+
+IMPLEMENTATION_BACKEND="$(config_get implementation_backend)"
+IMPLEMENTATION_BACKEND="${IMPLEMENTATION_BACKEND:-agent}"
+case "$IMPLEMENTATION_BACKEND" in
+  agent) ;;
+  contract)
+    [[ "$MODE" == exec ]] || { echo "implementation_backend=contract applies only to exec implementation tasks" >&2; exit 2; }
+    first_nonspace="$(printf '%s' "$TASK" | tr -d '[:space:]' | cut -c1)"
+    [[ "$first_nonspace" == '{' || "$first_nonspace" == '[' ]] || {
+      echo "implementation_backend=contract requires a JSON Task Contract; no hosted-agent fallback is performed" >&2
+      exit 2
+    }
+    exec "$SCRIPT_DIR/delegate.sh" contract "$TASK"
+    ;;
+  *)
+    echo "Unsupported implementation_backend: $IMPLEMENTATION_BACKEND" >&2
+    exit 2
+    ;;
+esac
 
 json_get() { # json_get <key> — crude extractor, avoids jq dependency
   grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$CONFIG" 2>/dev/null \
@@ -88,15 +203,10 @@ fi
 
 # ── audit log (JSON, one line per event) ──
 LOGFILE=".claude/delegate-coder.log"
-log_event() { # log_event <event> [extra_fields]
-  local event="$1" extra="${2:-}"
-  local ts
-  ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  local line="{\"ts\":\"$ts\",\"agent\":\"$AGENT\",\"model\":\"${MODEL}\",\"mode\":\"$MODE\",\"event\":\"$event\"${extra}}"
-  # Tolerate a missing .claude/ dir (e.g. worker run in a bare repo); never
-  # let a logging failure abort the delegation.
-  mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null || return 0
-  echo "$line" >> "$LOGFILE" 2>/dev/null || true
+log_event() { # log_event <event> [key value ...]
+  local event="$1"
+  shift
+  append_json_event "$LOGFILE" "$AGENT" "$MODEL" "$MODE" "$event" "$@"
 }
 
 # Command override takes precedence
@@ -108,7 +218,7 @@ if [[ -f "$CONFIG" ]] && command -v jq >/dev/null 2>&1; then
     log_event "start"
     bash -c "$CMD"
     _exit=$?
-    log_event "end" ",\"duration_s\":0,\"exit_code\":$_exit"
+    log_event "end" duration_s 0 exit_code "$_exit"
     exit $_exit
   fi
 fi
@@ -185,7 +295,7 @@ case "$AGENT" in
 esac
 
 _t1=$(date +%s)
-log_event "end" ",\"duration_s\":$((_t1 - _t0)),\"exit_code\":$_exit"
+log_event "end" duration_s "$((_t1 - _t0))" exit_code "$_exit"
 
 # ── path allowlist check ──
 if [[ "$MODE" == "exec" && -n "$ALLOW_PATHS" && $_exit -eq 0 ]]; then

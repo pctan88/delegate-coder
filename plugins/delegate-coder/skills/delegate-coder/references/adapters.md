@@ -24,7 +24,7 @@ It also accepts the contract on stdin. The required schema is:
 }
 ```
 
-The router calls `/api/generate` on `OLLAMA_HOST` (default `http://127.0.0.1:11434`) using `qwen3-coder:30b`, or the `DELEGATE_MODEL` override. It sends `num_ctx` (default `32768`) and `keep_alive` (default `30m`), rejects `done_reason: length`, stops resident non-target models, atomically replaces only the declared regular file, normalizes a trailing newline, and retries one failed verification once with curl/test timeouts. Its stdout is a markdown report with `PASS`, `NOOP`, or `FAIL`, retries, target-only diff(s), and final test log(s); progress is on stderr. A top-level JSON array runs sequentially and returns a combined report.
+The router calls `/api/generate` on `OLLAMA_HOST` (default `http://127.0.0.1:11434`) using `qwen3-coder:30b`, or the `DELEGATE_MODEL` override. It sends a strict JSON schema with deterministic temperature `0`, `num_ctx` (default `32768`), `keep_alive` (default `30m`), and bounded output. It rejects malformed/additional/empty structured output and `done_reason: length`, stops resident non-target models, requires a clean Git worktree and isolated branch, stages the candidate transactionally, restores failures, normalizes exactly one trailing newline, and retries one failed verification once with curl/test timeouts. Its stdout is a markdown report with `PASS`, `NOOP`, or `FAIL`, completed/failed/skipped batch counts, restoration state, Ollama timing metrics, a pre-contract target-only diff, and final test log(s); progress is on stderr. A top-level JSON array runs sequentially in exact JSON order and stops after the first failed child. The final orchestrator must inspect the cumulative diff and run full repository verification.
 
 ---
 

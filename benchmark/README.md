@@ -62,9 +62,22 @@ The repo is hard-reset (`git reset --hard && git clean -fd`) before every run, s
 - mean duration and turns
 - skill trigger rate in condition B (if the skill didn't trigger, that run measures nothing — investigate the description)
 
-### Optional local-contract column
+### Local contract benchmark (additive, never v1)
 
-Contract mode is a separate local-Ollama execution path. When benchmarking it, add a third condition/column named `C: contract` and record PASS/NOOP/FAIL rate, retry rate, wall time, model/context settings, and whether the GPU cleanup ran. Do not merge those measurements into the existing Claude A/B cost averages; they measure a different execution path. The benchmark must be run explicitly against a fresh result directory so the published v1 dataset is not overwritten.
+Contract mode is a separate local-Ollama execution path. The historical Claude+MiMo v1 `RESULTS.md` and `raw_data.jsonl` are frozen, unrelated to local-Qwen performance, and must not be overwritten. The additive path uses five warm repetitions per condition and records direct Ollama and contract-router conditions (plus an optional wrapper) with the same model, prompt, target, context, and output limits. It records prompt-evaluation time, generation time, total Ollama time, end-to-end time, success rate, and retry rate.
+
+Run it against a clean committed target without writing into the frozen dataset:
+
+```bash
+TARGET_FILE=src/file.ts \
+INSTRUCTIONS='precise bounded change with interfaces, invariants, forbidden changes, and test' \
+TEST_COMMAND='npm test -- src/file.spec.ts' \
+bash benchmark/run_local_contract.sh
+python3 benchmark/local_contract_report.py benchmark/local-results-YYYYMMDD-HHMMSS/<run>.jsonl
+python3 benchmark/test_local_contract_report.py
+```
+
+The reporter accepts arbitrary named conditions, including `C`, and deterministic fixtures are tested without a live model. Use a fresh `OUT_DIR`; the runner refuses to overwrite an existing output file and writes only there. The existing `report.py` remains the reporter for the 48-run Claude A/B aggregate.
 
 ## Honest reporting guidance for distribution
 

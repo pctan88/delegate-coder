@@ -15,6 +15,8 @@ It must cover:
 | Case | Expected result |
 |---|---|
 | Valid JSON contract | Generates, tests, reports `PASS`, preserves clean stdout |
+| Structured UTF-8 transport | Preserves nested Markdown fences and source triple backticks apart from one newline |
+| Malformed/empty/additional output | Rejects strict structured-output violations without writing |
 | Stdin contract | Accepts the same schema from stdin |
 | Model/context/keep-alive propagation | Request contains configured values |
 | GPU preparation | Stops non-selected resident model and keeps selected model |
@@ -24,11 +26,14 @@ It must cover:
 | Passing unchanged output | Reports `NOOP` |
 | Input prompt-size guard | Rejects before Ollama/request creation and preserves the target |
 | Second verification failure | Reports `FAIL` and makes no third request |
+| Transactional rollback | Restores existing bytes/mode and removes failed new files; reports `Restored` |
 | Truncated model response | Rejects `done_reason=length` without overwriting target |
 | New-file target | Creates a file when its existing parent is inside the repo |
-| Batch | Runs contracts sequentially and aggregates results |
+| Ordered batch | Runs 12 ordered fixtures (and supports 100+), reports counts, and stops after first failure without later requests |
 | Test timeout | Bounds the command and still applies the one-retry rule |
 | Traversal target | Rejects before Ollama is contacted |
+| Positive limits/proxy | Rejects zero values; asserts loopback `--noproxy` and remote proxy preservation |
+| Non-Git/dirty worktree | Rejects before Ollama is contacted |
 
 ## Regression checks
 
@@ -55,6 +60,7 @@ obtaining maintainer approval *(confirm process)*.
 ## Negative/security checks
 
 Reject absolute paths, `..` traversal, outside-repository resolution, symlinks,
-non-regular targets, missing parent directories, malformed required fields, and
-invalid numeric timeout/context settings. Treat `test_command` as trusted local
+non-regular targets, missing parent directories, malformed required fields,
+invalid numeric timeout/context settings, non-Git roots, dirty worktrees, and
+outside-target changes. Treat `test_command` as trusted local
 code; the router does not sandbox arbitrary shell commands.

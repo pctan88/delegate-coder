@@ -9,6 +9,8 @@ description: Guided first-time setup for the delegate-coder skill.
 2. Run `bash ${CLAUDE_PLUGIN_ROOT}/skills/delegate-coder/scripts/doctor.sh --all` to check their authentication status.
 3. Show the user the available agents and ask which one they want to configure. Call this `<agent>`.
 
+3a. Ask which implementation backend to prefer: `agent` (the default, preserving the existing `read`/`exec` adapters) or local `contract` for bounded, single-file implementation tasks. Explain that contract mode requires a clean isolated branch and objective tests, and never silently falls back to a hosted provider.
+
 4. **Privacy notice (only when the worker sends code off-machine).** If `<agent>`
    transmits code to an external provider, print this once:
 
@@ -35,12 +37,20 @@ description: Guided first-time setup for the delegate-coder skill.
    - If it prints nothing (unrecognized or ambiguous), ask the user for their test command.
    - It's fine to finish with **no** test command if the project has none — just omit the key.
 
-7. Write the choices to `.claude/delegate-coder.json` (include `model` only if one was chosen; include `test_command` only if known):
+7. Write the choices to `.claude/delegate-coder.json` (include `model` only if one was chosen; include `test_command` only if known; include the backend and contract settings when selected):
 ```json
 {
   "agent": "<chosen_agent>",
   "model": "<chosen_model_or_omit>",
   "test_command": "<detected_or_chosen_or_omit>",
+  "implementation_backend": "agent",
+  "contract": {
+    "model": "qwen3-coder:30b",
+    "num_ctx": 32768,
+    "keep_alive": "30m",
+    "curl_timeout": 600,
+    "test_timeout": 300
+  },
   "enabled": true
 }
 ```

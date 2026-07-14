@@ -46,7 +46,15 @@ an empty or missing file reproduces the benchmarked default path.
     "read": "",
     "exec": ""
   },
-  "max_files_before_full_diff_review": 5
+  "max_files_before_full_diff_review": 5,
+  "implementation_backend": "agent", // agent (default) | contract (opt-in)
+  "contract": {
+    "model": "qwen3-coder:30b",
+    "num_ctx": 32768,
+    "keep_alive": "30m",
+    "curl_timeout": 600,
+    "test_timeout": 300
+  }
 }
 ```
 
@@ -56,6 +64,24 @@ an empty or missing file reproduces the benchmarked default path.
   and enforced by `delegate.sh`.
 - `DELEGATE_AGENT` overrides the `agent` field. `DELEGATE_PATH_EXTRA` prepends
   directories to `PATH` for agent discovery.
+- `implementation_backend` is optional and defaults to `agent`, preserving
+  existing `read`/`exec`. `contract` applies only to JSON `exec` Task Contracts;
+  it requires a clean isolated branch and never silently falls back to a hosted
+  worker. Contract instructions must include interfaces/signatures, invariants,
+  dependency ordering, forbidden changes, and the exact objective test.
+- Contract numeric limits must be strictly positive. See the DELEGATE-CODER-001
+  API contract for transactional and structured-output semantics.
+
+## Local contract dispatch
+
+```bash
+bash plugins/delegate-coder/skills/delegate-coder/scripts/delegate.sh contract '<json contract>'
+```
+
+The default backend remains the normal agent adapter. Cloud orchestrators use
+contract mode only for bounded one-file implementation, decompose ordered
+multi-file work into sequential contracts, and retain architecture, security,
+cumulative-diff, and full-repository verification responsibility.
 
 ## Built-in adapters
 
