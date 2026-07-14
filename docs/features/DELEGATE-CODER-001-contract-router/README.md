@@ -4,6 +4,10 @@ Turn `delegate-coder` into a strict local execution harness for bounded,
 single-file edits while keeping Claude/Codex/other cloud orchestrators in the
 planning and acceptance role.
 
+Execution runs entirely against a local Ollama model, so code never leaves the
+machine — the privacy-safe path for confidential work, unlike hosted chat-agent
+workers.
+
 | | |
 |---|---|
 | **Feature** | DELEGATE-CODER-001 — contract-driven local Qwen worker |

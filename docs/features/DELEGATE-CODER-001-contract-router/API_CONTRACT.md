@@ -32,11 +32,17 @@ valid JSON object is the supported protocol and should be preferred.
 
 ## Ollama request
 
-The router sends `POST {OLLAMA_HOST}/api/generate` with `stream: false`, the
+Before the request is sent, the router estimates the prompt size
+(`system` + `target_file` + `instructions` + current file contents, ~3 bytes per
+token). If that estimate exceeds `num_ctx`, the contract is rejected up front with
+a non-zero exit and no request or file write, so an oversized file cannot be
+silently prompt-truncated.
+
+The router then sends `POST {OLLAMA_HOST}/api/generate` with `stream: false`, the
 configured model, compiler system prompt, `options.num_ctx`, and `keep_alive`.
 The model response must contain a non-empty `response`; the first fenced block
-is used when present. `done_reason: length` is a hard failure and never writes a
-file.
+is used when present. `done_reason: length` (output-side truncation) is a hard
+failure and never writes a file.
 
 ## Output
 

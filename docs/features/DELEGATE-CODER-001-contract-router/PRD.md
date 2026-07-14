@@ -24,6 +24,11 @@ target, prepares Ollama, asks the local model for a complete file replacement,
 runs the supplied verification command, retries once with the exact failure log
 if needed, and returns status, target-only diff, and final test output.
 
+All generation runs against a local Ollama server, so file contents never leave
+the machine. Contract mode is therefore the privacy-safe execution path for
+employer or confidential code, in contrast to hosted chat-agent workers that send
+code to a third-party provider.
+
 ## Scope
 
 - Parse one contract or a sequential top-level contract array.
@@ -54,7 +59,9 @@ if needed, and returns status, target-only diff, and final test output.
    rejected before Ollama is contacted.
 3. The selected `DELEGATE_MODEL`, `DELEGATE_NUM_CTX`, and `DELEGATE_KEEP_ALIVE`
    values reach the Ollama request.
-4. A response with `done_reason: length` never replaces the target file.
+4. An estimated prompt larger than `num_ctx` is rejected before the model is
+   contacted, and a response with `done_reason: length` never replaces the
+   target file.
 5. A failed verification gets exactly one correction attempt containing the
    current file and exact terminal output; a second failure returns `FAIL`.
 6. An unchanged passing result returns `NOOP`, not `PASS`.
