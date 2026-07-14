@@ -30,11 +30,12 @@ if [[ "$MODE" == "contract" ]]; then
   fi
   CONTRACT_EXIT=$?
   cat "$CONTRACT_REPORT"
-  CONTRACT_STATUS="ERROR"
+  CONTRACT_STATUS="$(sed -n 's/^- Status: //p' "$CONTRACT_REPORT" | head -n1)"
+  case "$CONTRACT_STATUS" in
+    PASS|NOOP|FAIL) ;;
+    *) CONTRACT_STATUS="ERROR" ;;
+  esac
   CONTRACT_RETRIES=0
-  grep -q -- '- Status: PASS' "$CONTRACT_REPORT" && CONTRACT_STATUS="PASS"
-  grep -q -- '- Status: NOOP' "$CONTRACT_REPORT" && CONTRACT_STATUS="NOOP"
-  grep -q -- '- Status: FAIL' "$CONTRACT_REPORT" && CONTRACT_STATUS="FAIL"
   CONTRACT_RETRIES="$(sed -n 's/^- Retries: //p' "$CONTRACT_REPORT" | head -n1)"
   [[ -n "$CONTRACT_RETRIES" ]] || CONTRACT_RETRIES=0
   rm -f "$CONTRACT_REPORT"

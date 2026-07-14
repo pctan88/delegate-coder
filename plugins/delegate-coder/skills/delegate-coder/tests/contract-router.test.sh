@@ -52,6 +52,7 @@ content=good
 if [[ "$mode" == retry && "$count" -eq 1 ]]; then content=bad; fi
 if [[ "$mode" == bad ]]; then content=bad; fi
 if [[ "$mode" == noop ]]; then content=original; fi
+if [[ "$mode" == batch-noop && "$count" -eq 2 ]]; then content=original; fi
 done_reason=stop
 if [[ "$mode" == truncated ]]; then content=partial; done_reason=length; fi
 printf '{"response":"```text\\n%s\\n```","done_reason":"%s"}' "$content" "$done_reason"
@@ -146,6 +147,20 @@ CURL_MODE=noop run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "noop con
 contains "$CASE_DIR/stdout" '- Status: NOOP' "unchanged output should be reported as NOOP"
 pass "empty-diff detection"
 
+# A prompt that already exceeds the configured context is rejected before
+# Ollama is contacted, preventing silent prompt truncation.
+setup_case promptguard
+make_contract target.txt "true" "$CASE_DIR/contract.json"
+set +e
+DELEGATE_NUM_CTX=1 run_dispatch "$(cat "$CASE_DIR/contract.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "oversized prompt should fail"
+[[ ! -s "$CASE_DIR/curl.count" ]] || fail "prompt guard must run before Ollama"
+[[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "prompt guard must not overwrite target"
+contains "$CASE_DIR/stderr" 'estimated prompt exceeds num_ctx' "prompt guard error"
+pass "prompt truncation guard"
+
 # A second failure is returned without a third generation attempt.
 setup_case failed
 make_contract target.txt "grep -q '^good$' target.txt" "$CASE_DIR/contract.json"
@@ -188,14 +203,16 @@ python3 - "$CASE_DIR/batch.json" <<'PY'
 import json, sys
 json.dump([
     {"target_file": "target.txt", "instructions": "update", "test_command": "grep -q '^good$' target.txt"},
-    {"target_file": "second.txt", "instructions": "update", "test_command": "grep -q '^good$' second.txt"},
+    {"target_file": "second.txt", "instructions": "update", "test_command": "grep -q '^original$' second.txt"},
 ], open(sys.argv[1], "w"))
 PY
-run_dispatch "$(cat "$CASE_DIR/batch.json")" || fail "contract batch should pass"
+CURL_MODE=batch-noop run_dispatch "$(cat "$CASE_DIR/batch.json")" || fail "contract batch should pass"
 [[ "$(cat "$CASE_DIR/curl.count")" == 2 ]] || fail "batch should generate each contract once"
 contains "$CASE_DIR/stdout" '# Contract Batch Result' "batch report heading"
 contains "$CASE_DIR/stdout" '## Contract 1' "batch report first contract"
 contains "$CASE_DIR/stdout" '## Contract 2' "batch report second contract"
+contains "$CASE_DIR/stdout" -- '- Status: PASS' "batch with a NOOP child should aggregate as PASS"
+contains "$CASE_DIR/.claude/delegate-coder.log" '"status":"PASS"' "batch audit should use aggregate status"
 pass "sequential contract batch"
 
 # Verification commands are bounded and still receive the single retry.

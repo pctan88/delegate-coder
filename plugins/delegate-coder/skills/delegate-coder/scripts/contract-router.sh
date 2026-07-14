@@ -48,6 +48,9 @@ SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SO
 # single-contract run, so path checks, retries, and test gates are unchanged.
 BATCH_DIR="$WORK_DIR/batch"
 mkdir "$BATCH_DIR" || fail "could not create batch workspace"
+if [[ "$(tr -d '[:space:]' < "$CONTRACT_FILE" | cut -c1)" == "[" ]] && ! command -v python3 >/dev/null 2>&1; then
+  fail "python3 is required for contract batches"
+fi
 if command -v python3 >/dev/null 2>&1 && python3 - "$CONTRACT_FILE" "$BATCH_DIR" <<'PY' 2>/dev/null
 import json
 import pathlib
@@ -205,6 +208,21 @@ import sys
 request_path, target, instructions_path, source_path, failure_path, model, system_prompt, num_ctx, keep_alive = sys.argv[1:]
 instructions = pathlib.Path(instructions_path).read_text()
 source = pathlib.Path(source_path).read_text()
+context_limit = int(num_ctx)
+source_bytes = len(source.encode())
+prompt_bytes = (
+    len(system_prompt.encode())
+    + len(target.encode())
+    + len(instructions.encode())
+    + source_bytes
+    + 1024
+)
+estimated_prompt_tokens = (prompt_bytes + 2) // 3
+if estimated_prompt_tokens > context_limit:
+    raise SystemExit(
+        "estimated prompt exceeds num_ctx: "
+        f"{estimated_prompt_tokens} tokens > {context_limit}"
+    )
 user = (
     f"Target file: {target}\n\n"
     f"Requested change:\n{instructions}\n\n"
