@@ -62,6 +62,10 @@ The repo is hard-reset (`git reset --hard && git clean -fd`) before every run, s
 - mean duration and turns
 - skill trigger rate in condition B (if the skill didn't trigger, that run measures nothing — investigate the description)
 
+### Optional local-contract column
+
+Contract mode is a separate local-Ollama execution path. When benchmarking it, add a third condition/column named `C: contract` and record PASS/NOOP/FAIL rate, retry rate, wall time, model/context settings, and whether the GPU cleanup ran. Do not merge those measurements into the existing Claude A/B cost averages; they measure a different execution path. The benchmark must be run explicitly against a fresh result directory so the published v1 dataset is not overwritten.
+
 ## Honest reporting guidance for distribution
 
 - Run at least **3 reps** per task per condition (5 is better) — single runs are noise

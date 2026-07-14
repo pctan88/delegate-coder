@@ -25,6 +25,10 @@ Project-level config lives at `.claude/delegate-coder.json`:
 
 The `DELEGATE_AGENT` environment variable overrides the `agent` field when set.
 
+## Contract mode
+
+Contract mode does not use `agent` or `model` from this configuration. It is invoked explicitly with `bash scripts/delegate.sh contract` and requires a local Ollama server with `qwen3-coder:30b` available, unless `DELEGATE_MODEL` selects another local model. Pass a JSON object containing `target_file`, `instructions`, and `test_command`, pipe it on stdin, or pass an array for sequential contracts. The target must be an in-repository non-symlink regular file or a new file in an existing directory. The router returns a target-only diff and final test log, makes at most one self-correction attempt after a failed test, reports unchanged output as `NOOP`, and rejects context-truncated responses. `DELEGATE_NUM_CTX`, `DELEGATE_KEEP_ALIVE`, `DELEGATE_CURL_TIMEOUT`, and `DELEGATE_TEST_TIMEOUT` tune the local limits.
+
 ## Safe permissions (important)
 
 Worker agents in headless mode need auto-approval to run unattended, but blanket auto-approval (`--dangerously-skip-permissions`, `--yolo`, disabled sandboxing) lets a confused worker run anything. Prefer, in order:

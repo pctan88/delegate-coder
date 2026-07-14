@@ -74,6 +74,30 @@ curl -fsSL https://raw.githubusercontent.com/pctan88/delegate-coder/main/install
 
 Configuration details: [setup.md](plugins/delegate-coder/skills/delegate-coder/references/setup.md)
 
+## Contract mode (local Ollama)
+
+For a strict, low-token edit, send `delegate.sh` a Task Contract instead of a chat prompt. Keep contracts single-file and sequential: a three-file feature should be three contracts, never one exploratory multi-file request.
+
+```json
+{
+  "target_file": "src/path/to/file.ts",
+  "instructions": "Specific functional target or removal goal here.",
+  "test_command": "npm run test -- src/path/to/file.spec.ts"
+}
+```
+
+Run it from the target repository with:
+
+```bash
+bash path/to/delegate.sh contract '{"target_file":"src/file.ts","instructions":"...","test_command":"npm test -- src/file.spec.ts"}'
+```
+
+The JSON may also be piped on stdin. Contract mode uses the local Ollama HTTP API with `qwen3-coder:30b`, stops other resident Ollama models first, replaces only the declared regular file, and runs the supplied test command. A failing test gets exactly one correction attempt. Standard output is a markdown report containing the final status, the target-only `git diff`, and the final test log; progress and errors go to stderr. Ollama must be installed and serving the configured `OLLAMA_HOST` (default `http://127.0.0.1:11434`). The existing `read` and `exec` chat-agent modes remain supported.
+
+Set `DELEGATE_MODEL` to select another local Ollama model, `DELEGATE_NUM_CTX` to change the context limit (default `32768`), `DELEGATE_CURL_TIMEOUT`/`DELEGATE_TEST_TIMEOUT` for timeouts, and `DELEGATE_KEEP_ALIVE` for model retention (default `30m`). If the model produces no change, the report says `NOOP`; if it reports `done_reason: length`, the file is not replaced. A top-level JSON array runs contracts sequentially and returns one combined report with aggregate retries.
+
+Runs through `delegate.sh` also append start/end events, status, duration, and retries to `.claude/delegate-coder.log`, so `/delegate stats` includes contract executions.
+
 ## Does it actually save credits?
 
 This repo includes a [benchmark harness](benchmark/) that measures it properly: paired A/B runs (with/without the skill), real cost numbers from Claude Code's own JSON output, and objective pass/fail verification per task.

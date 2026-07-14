@@ -70,6 +70,17 @@ Read the full `git diff` only when: the changeset is large (>5 files), it touche
 
 If the worker fails the same task **twice**, stop delegating it. Either rewrite the spec to be more explicit (a spec problem) or implement it yourself (a capability problem). Never enter a third retry — retry loops silently destroy the token savings this skill exists for.
 
+### Contract mode
+
+For a bounded local single-file edit, use the contract router instead of a chat-agent mode. Decompose multi-file work into one contract per file and run those contracts sequentially; do not send an exploratory multi-file task to the full-file worker.
+
+```bash
+bash scripts/delegate.sh contract '<json contract>'
+# or: printf '%s' '<json contract>' | bash scripts/delegate.sh contract
+```
+
+The contract must contain string fields named `target_file`, `instructions`, and `test_command`. A top-level array of these objects is also accepted for sequential batches. The router validates that the target is an in-repository regular file or a new file whose parent already exists, prepares the local Ollama process environment, asks `qwen3-coder:30b` (or `DELEGATE_MODEL`) for a complete replacement through `/api/generate`, and runs the supplied test command with bounded timeouts. It makes one correction generation after a failed test, never more than one. Context truncation is rejected, unchanged output is reported as `NOOP`, and the report includes retries, target-only diff(s), and final test log(s) on stdout; operational progress is sent to stderr. This mode requires a local Ollama server. The existing `read` and `exec` adapters are unchanged.
+
 ## Session continuity
 
 For multi-step tasks, reuse the worker's session instead of re-feeding context. Agents that support it (see `references/adapters.md`): MiMo (`--session <id>` / `-c`), Codex (`resume`), others vary. Capture the session ID from the first run's output when available.

@@ -6,6 +6,28 @@ In all examples, `$TASK` is the full task spec as a single quoted string.
 
 ---
 
+## Contract router (local Ollama)
+
+The contract path is independent of the configured chat agent:
+
+```bash
+bash scripts/delegate.sh contract '<json contract>'
+```
+
+It also accepts the contract on stdin. The required schema is:
+
+```json
+{
+  "target_file": "relative/path/to/file",
+  "instructions": "precise requested change",
+  "test_command": "exact command to run from the repository root"
+}
+```
+
+The router calls `/api/generate` on `OLLAMA_HOST` (default `http://127.0.0.1:11434`) using `qwen3-coder:30b`, or the `DELEGATE_MODEL` override. It sends `num_ctx` (default `32768`) and `keep_alive` (default `30m`), rejects `done_reason: length`, stops resident non-target models, atomically replaces only the declared regular file, normalizes a trailing newline, and retries one failed verification once with curl/test timeouts. Its stdout is a markdown report with `PASS`, `NOOP`, or `FAIL`, retries, target-only diff(s), and final test log(s); progress is on stderr. A top-level JSON array runs sequentially and returns a combined report.
+
+---
+
 ## MiMo Code (`mimo`)
 
 - **exec:** `mimo run "$TASK" --format default`

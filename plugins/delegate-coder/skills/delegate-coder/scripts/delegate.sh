@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # delegate.sh — route a task to the configured worker coding agent.
 # Usage: delegate.sh <read|exec> "<task spec>"
+#        delegate.sh contract ["<task contract JSON>"]
 set -uo pipefail
 # Enhance PATH with common installation directories for worker agents
 EXTRA_PATHS="${DELEGATE_PATH_EXTRA:-}"
@@ -11,8 +12,40 @@ MODE="${1:-}"
 TASK="${2:-}"
 CONFIG=".claude/delegate-coder.json"
 
+# Contract mode is intentionally independent of the configured chat worker.
+# It reads stdin when the JSON argument is omitted.
+if [[ "$MODE" == "contract" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  CONTRACT_LOGFILE=".claude/delegate-coder.log"
+  CONTRACT_MODEL="${DELEGATE_MODEL:-qwen3-coder:30b}"
+  CONTRACT_T0="$(date +%s)"
+  mkdir -p "$(dirname "$CONTRACT_LOGFILE")" 2>/dev/null || true
+  printf '{"ts":"%s","agent":"local-ollama","model":"%s","mode":"contract","event":"start"}\n' \
+    "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$CONTRACT_MODEL" >> "$CONTRACT_LOGFILE" 2>/dev/null || true
+  CONTRACT_REPORT="$(mktemp "${TMPDIR:-/tmp}/delegate-coder-report.XXXXXX")" || exit 1
+  if [[ $# -ge 2 ]]; then
+    "$SCRIPT_DIR/contract-router.sh" "$TASK" > "$CONTRACT_REPORT"
+  else
+    "$SCRIPT_DIR/contract-router.sh" > "$CONTRACT_REPORT"
+  fi
+  CONTRACT_EXIT=$?
+  cat "$CONTRACT_REPORT"
+  CONTRACT_STATUS="ERROR"
+  CONTRACT_RETRIES=0
+  grep -q -- '- Status: PASS' "$CONTRACT_REPORT" && CONTRACT_STATUS="PASS"
+  grep -q -- '- Status: NOOP' "$CONTRACT_REPORT" && CONTRACT_STATUS="NOOP"
+  grep -q -- '- Status: FAIL' "$CONTRACT_REPORT" && CONTRACT_STATUS="FAIL"
+  CONTRACT_RETRIES="$(sed -n 's/^- Retries: //p' "$CONTRACT_REPORT" | head -n1)"
+  [[ -n "$CONTRACT_RETRIES" ]] || CONTRACT_RETRIES=0
+  rm -f "$CONTRACT_REPORT"
+  printf '{"ts":"%s","agent":"local-ollama","model":"%s","mode":"contract","event":"end","duration_s":%s,"exit_code":%s,"status":"%s","retries":%s}\n' \
+    "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$CONTRACT_MODEL" "$(( $(date +%s) - CONTRACT_T0 ))" "$CONTRACT_EXIT" "$CONTRACT_STATUS" "$CONTRACT_RETRIES" >> "$CONTRACT_LOGFILE" 2>/dev/null || true
+  exit "$CONTRACT_EXIT"
+fi
+
 if [[ -z "$MODE" || -z "$TASK" ]]; then
   echo "Usage: delegate.sh <read|exec> \"<task spec>\"" >&2
+  echo "       delegate.sh contract [\"<task contract JSON>\"]" >&2
   exit 2
 fi
 if [[ "$MODE" != "read" && "$MODE" != "exec" ]]; then
