@@ -18,6 +18,8 @@ contract is an object with exactly these required string fields:
 
 The top-level value may also be an array of contract objects. Items run
 sequentially in the current working tree and produce one aggregate report.
+Batch parsing requires `python3`; without it, an array is rejected rather than
+being misread by the single-contract fallback parser.
 
 ### Field semantics
 
@@ -32,11 +34,11 @@ valid JSON object is the supported protocol and should be preferred.
 
 ## Ollama request
 
-Before the request is sent, the router estimates the prompt size
-(`system` + `target_file` + `instructions` + current file contents, ~3 bytes per
-token). If that estimate exceeds `num_ctx`, the contract is rejected up front with
-a non-zero exit and no request or file write, so an oversized file cannot be
-silently prompt-truncated.
+Before the request is sent, the router estimates the complete prompt size
+(`system` + labels + `target_file` + `instructions` + current file contents, and
+retry failure output when correcting; ~3 bytes per token). If that estimate
+exceeds `num_ctx`, the contract is rejected up front with a non-zero exit and no
+request or file write, so an oversized file cannot be silently prompt-truncated.
 
 The router then sends `POST {OLLAMA_HOST}/api/generate` with `stream: false`, the
 configured model, compiler system prompt, `options.num_ctx`, and `keep_alive`.
@@ -63,7 +65,9 @@ Stdout is a markdown report. Progress and operational errors go to stderr.
 ```
 
 Exit status is zero for `PASS` and `NOOP`, non-zero for `FAIL` or setup/
-generation errors. A batch report aggregates child reports and retries.
+generation errors. A batch report is `PASS` when every child is `PASS` or
+`NOOP`, otherwise `FAIL`; its retry count is the sum of child retries. The
+dispatcher audits that aggregate status.
 
 ## Environment defaults
 

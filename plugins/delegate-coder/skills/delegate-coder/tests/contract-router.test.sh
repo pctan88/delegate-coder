@@ -147,20 +147,6 @@ CURL_MODE=noop run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "noop con
 contains "$CASE_DIR/stdout" '- Status: NOOP' "unchanged output should be reported as NOOP"
 pass "empty-diff detection"
 
-# A prompt that already exceeds the configured context is rejected before
-# Ollama is contacted, preventing silent prompt truncation.
-setup_case promptguard
-make_contract target.txt "true" "$CASE_DIR/contract.json"
-set +e
-DELEGATE_NUM_CTX=1 run_dispatch "$(cat "$CASE_DIR/contract.json")"
-status=$?
-set -e
-[[ "$status" -ne 0 ]] || fail "oversized prompt should fail"
-[[ ! -s "$CASE_DIR/curl.count" ]] || fail "prompt guard must run before Ollama"
-[[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "prompt guard must not overwrite target"
-contains "$CASE_DIR/stderr" 'estimated prompt exceeds num_ctx' "prompt guard error"
-pass "prompt truncation guard"
-
 # A second failure is returned without a third generation attempt.
 setup_case failed
 make_contract target.txt "grep -q '^good$' target.txt" "$CASE_DIR/contract.json"

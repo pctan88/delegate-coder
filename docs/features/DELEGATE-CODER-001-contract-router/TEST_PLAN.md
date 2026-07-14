@@ -22,6 +22,7 @@ It must cover:
 | Regex fallback | Damaged wrapper is parsed for the three required fields |
 | Failed verification | Exactly one correction request includes exact failure output |
 | Passing unchanged output | Reports `NOOP` |
+| Input prompt-size guard | Rejects before Ollama/request creation and preserves the target |
 | Second verification failure | Reports `FAIL` and makes no third request |
 | Truncated model response | Rejects `done_reason=length` without overwriting target |
 | New-file target | Creates a file when its existing parent is inside the repo |

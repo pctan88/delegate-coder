@@ -15,7 +15,7 @@ on top of the `read`/`exec` orchestration described here.
 | **Feature** | DELEGATE-CODER-000 — worker orchestration, config surface, benchmark harness |
 | **Status** | Shipped (`v0.2.0`–`v0.2.2`); documentation backfilled 2026-07-14 |
 | **Repository** | `delegate-coder` — marketplace + plugin + benchmark harness |
-| **Source implementation** | `626406b` (v0.2.0), `89e4935` (marketplace), `630774a` (v0.2.1), `b0ad6f6` (v0.2.2) |
+| **Source implementation** | `626406b` (v0.2.0), `89e4935` (marketplace), `630774a` (v0.2.1), `b0ad6f6` (v0.2.2), `c698526` (read-policy correction) |
 | **Cross-repo work** | Not applicable; the plugin and harness are contained here |
 
 ## Files in this pack

@@ -11,8 +11,9 @@ last_synced: 2026-07-14
 
 Read `PRD.md`, `HLD.md`, `API_CONTRACT.md`, and `TEST_PLAN.md` before changing
 orchestration behavior. This feature shipped across `626406b`, `89e4935`,
-`630774a`, and `b0ad6f6`; the plan records the intended boundaries and the
-acceptance evidence for future maintenance.
+`630774a`, `b0ad6f6`, and the read-policy correction in `c698526`; the plan
+records the intended boundaries and the acceptance evidence for future
+maintenance.
 
 ## Implemented surface
 
@@ -22,7 +23,7 @@ acceptance evidence for future maintenance.
 - `plugins/delegate-coder/skills/delegate-coder/references/{adapters,setup,models}.md`
 - `plugins/delegate-coder/commands/delegate-{setup,doctor,model,scope,stats,on,off}.md`
 - `benchmark/` harness plus the frozen v1 dataset
-- `tests/core.test.sh` — deterministic tests for `delegate.sh` and `detect-test.sh`
+- `plugins/delegate-coder/skills/delegate-coder/tests/core.test.sh` — deterministic tests for `delegate.sh` and `detect-test.sh`
 
 ## Ordered maintenance workflow
 
@@ -33,7 +34,8 @@ acceptance evidence for future maintenance.
 3. Keep every new config field optional and defaulted to current behavior.
 4. Add or update deterministic tests (fake worker on `PATH`, temp fixtures)
    before changing script behavior.
-5. Run `tests/core.test.sh` and `git diff --check`; inspect diff scope.
+5. Run `bash plugins/delegate-coder/skills/delegate-coder/tests/core.test.sh` and
+   `git diff --check`; inspect diff scope.
 6. Do not overwrite `benchmark/RESULTS.md` or rerun the frozen v1 matrix.
 7. Append a `DECISION_LOG.md` entry when behavior, safety boundaries, adapters,
    or benchmark policy change.

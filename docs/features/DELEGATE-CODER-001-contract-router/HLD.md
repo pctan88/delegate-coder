@@ -24,6 +24,7 @@ Ollama, so the worker does not need a multi-turn tool loop.
 contract JSON
   -> delegate.sh audit:start
   -> contract-router parse + path guards
+  -> estimate complete prompt; reject if it exceeds num_ctx
   -> stop non-selected Ollama models
   -> POST /api/generate (single turn, full-file response)
   -> reject done_reason=length; extract code fence; normalize newline
@@ -46,6 +47,8 @@ contract JSON
   existing mode where applicable.
 - The original file is snapshotted before generation and is not replaced when
   generation is rejected.
+- The complete initial prompt is estimated before Ollama model eviction or an
+  HTTP request; correction prompts are estimated again with the failure log.
 - Generation and tests have bounded timeouts. A failed test can trigger only
   one retry.
 

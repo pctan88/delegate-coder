@@ -4,7 +4,7 @@
 
 - [ ] Maintainer confirms `PRD.md` scope and that new fields default to current behavior.
 - [ ] `API_CONTRACT.md` matches `delegate.sh`, the config schema, and the adapter table.
-- [ ] `tests/core.test.sh` passes.
+- [ ] `bash plugins/delegate-coder/skills/delegate-coder/tests/core.test.sh` passes.
 - [ ] `git diff --check` passes and the diff rewrites no benchmark result.
 - [ ] `SKILL.md`, `detect.sh`, and the benchmarked `delegate.sh` invocation are
       unchanged — or a new labeled benchmark dataset is planned (never a v1 rerun).
@@ -16,7 +16,9 @@
 
 - [ ] `detect.sh` lists installed agents; `doctor.sh --all` reports auth status.
 - [ ] Delegate one trivial `read` task against a disposable repo and confirm output.
-- [ ] Confirm `read` cannot write and `exec` changes are caught by `git diff` + tests.
+- [ ] Confirm enforcing `read` adapters cannot write; review Gemini, Qwen, and
+      OpenCode as non-enforcing read paths, and confirm `exec` changes are caught
+      by `git diff` + tests.
 - [ ] Confirm `.claude/delegate-coder.log` start/end events and that `stats.sh` summarizes them.
 - [ ] Confirm an `allow_paths` violation aborts with the expected exit code.
 

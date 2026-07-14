@@ -16,9 +16,9 @@ default `read`/`exec` adapters and benchmark policy are recorded there.
 | | |
 |---|---|
 | **Feature** | DELEGATE-CODER-001 — contract-driven local Qwen worker |
-| **Status** | Implemented in `f88aa20`; documentation and acceptance tracking backfilled |
+| **Status** | Implemented; initial router in `f88aa20`, follow-up hardening in `0c70396` and `b620adb` |
 | **Repository** | `delegate-coder` — plugin marketplace plus benchmark harness |
-| **Source implementation** | `f88aa20` — Add contract-driven local Ollama router, 2026-07-14 |
+| **Source implementation** | `f88aa20` (initial router), `0c70396` (review nits), `b620adb` (prompt preflight/privacy correction) |
 | **Cross-repo work** | Not applicable; the router and its tests are contained here |
 
 ## Files in this pack
@@ -37,6 +37,8 @@ full, and return the target-only diff plus test log to the orchestrator.
 
 - Local Ollama must be serving the selected model, normally
   `qwen3-coder:30b`.
+- The router must reject an estimated oversized prompt before model eviction or
+  an HTTP request; output-side `done_reason: length` remains a separate guard.
 - Contract-router tests must pass, including retry, timeout, truncation,
   no-op, new-file, batch, and path-boundary cases.
 - The frozen v1 benchmark must remain unchanged. Any benchmark-impacting

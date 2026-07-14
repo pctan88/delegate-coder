@@ -10,8 +10,9 @@ last_synced: 2026-07-14
 ## Source of truth
 
 Read `PRD.md`, `HLD.md`, `API_CONTRACT.md`, and `TEST_PLAN.md` before making
-changes. The implementation landed in commit `f88aa20`; this plan records the
-intended boundaries and acceptance evidence for future maintenance.
+changes. The initial implementation landed in `f88aa20`, with review hardening
+in `0c70396` and `b620adb`; this plan records the intended boundaries and
+acceptance evidence for future maintenance.
 
 ## Implemented surface
 

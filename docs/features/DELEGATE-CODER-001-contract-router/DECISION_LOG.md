@@ -1,7 +1,8 @@
 # Decision Log: Contract-driven local Qwen worker
 
 Append-only. This log was backfilled on 2026-07-14 from the repository history,
-especially commits `626406b`, `89e4935`, `630774a`, `b0ad6f6`, and `f88aa20`.
+especially commits `626406b`, `89e4935`, `630774a`, `b0ad6f6`, `f88aa20`,
+`0c70396`, and `b620adb`.
 The entries describe intent inferred from commit messages and surrounding docs;
 ownership and any policy marked `(confirm)` still require maintainer validation.
 
@@ -13,3 +14,6 @@ ownership and any policy marked `(confirm)` still require maintainer validation.
 | 4 | 2026-07-14 | **Backfilled:** add an opt-in contract mode using raw Ollama generation and full-file replacement | `f88aa20` adds `contract-router.sh`, dispatcher support, and focused tests to reduce chat-loop/prefill overhead | Continue multi-turn chat mode; perform targeted search/replace; trust summaries | A cloud orchestrator can send a low-token, single-file execution unit with deterministic output | Maintainer *(confirm)* |
 | 5 | 2026-07-14 | **Backfilled:** make safety gates part of the router contract | `f88aa20` tests path guards, atomic writes, truncation rejection, bounded timeouts, one retry, and `NOOP` | Write any model output; retry indefinitely; allow unbounded commands | Incorrect or incomplete worker output is blocked or made visible before handoff | Plugin owner *(confirm)* |
 | 6 | 2026-07-14 | **Proposed:** keep contract mode separate from the benchmarked `read`/`exec` path | The new mode is explicitly invoked as `delegate.sh contract`; existing benchmark policy forbids accidental dataset mutation | Replace the existing adapter path with the local model | Easier rollout and clearer benchmark accounting; new mode still needs its own measurements | Maintainer / benchmark owner *(confirm)* |
+| 7 | 2026-07-14 | **Backfilled:** preflight the complete prompt before Ollama eviction or HTTP generation | `b620adb` added an estimated prompt-size guard, including correction context, after the risk of silent input truncation was identified | Rely only on output `done_reason`; let Ollama truncate the input | Oversized contracts fail without changing the target or disturbing resident models | Plugin owner *(confirm)* |
+| 8 | 2026-07-14 | **Backfilled:** treat contract privacy as loopback-only by default, not as an unconditional local guarantee | `b620adb` documented that `OLLAMA_HOST` can be overridden and then receives prompt/file contents | Claim all contract runs are local; forbid host overrides | Users get a local default with an explicit remote-endpoint disclosure | Maintainer *(confirm)* |
+| 9 | 2026-07-14 | **Backfilled:** reject Python-less contract batches and audit the report's top-level aggregate status | `0c70396` hardened array parsing and changed dispatcher status extraction to read the report status line rather than grep child text | Let arrays fall through to the single-contract regex fallback; infer status by substring order | Batch failures are explicit and mixed `PASS`/`NOOP` batches are recorded as `PASS` | Plugin owner *(confirm)* |
