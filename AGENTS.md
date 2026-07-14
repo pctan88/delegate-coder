@@ -1,10 +1,17 @@
 # delegate-coder AI-first project guide
 
 delegate-coder is a Claude Code plugin marketplace and benchmark harness. The
-canonical planning and delivery record for the contract-router work is the
-feature pack at:
+canonical planning and delivery records live under `docs/features/`:
 
-`docs/features/DELEGATE-CODER-001-contract-router/`
+- `DELEGATE-CODER-000-worker-orchestration/` — the foundational product:
+  marketplace, the `read`/`exec` worker adapters, config surface, and benchmark
+  harness.
+- `DELEGATE-CODER-001-contract-router/` — the opt-in strict single-file contract
+  execution path, layered on top of DELEGATE-CODER-000.
+
+Read the pack that matches the code you are changing; a change to the default
+`read`/`exec` path belongs to DELEGATE-CODER-000, the `contract` mode to
+DELEGATE-CODER-001.
 
 ## AI-first workflow
 

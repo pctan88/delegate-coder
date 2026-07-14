@@ -76,13 +76,20 @@ Configuration details: [setup.md](plugins/delegate-coder/skills/delegate-coder/r
 
 ## AI-first planning and tracking
 
-The contract-router implementation is documented as a reviewable feature pack:
-[DELEGATE-CODER-001](docs/features/DELEGATE-CODER-001-contract-router/README.md).
-Read its PRD, HLD, API contract, plan, test plan, decision log, and release
-checklist before changing the router. Multi-file work should be decomposed into
-bounded sequential contracts, and the decision log is the append-only record of
-design changes. This feature is single-repository, so no cross-repo plan is
-included.
+Implementation is documented as reviewable feature packs under `docs/features/`,
+each with a PRD, HLD, API contract, plan, test plan, decision log, and release
+checklist:
+
+- [DELEGATE-CODER-000](docs/features/DELEGATE-CODER-000-worker-orchestration/README.md)
+  — foundational worker orchestration: marketplace, `read`/`exec` adapters,
+  config surface, and benchmark harness.
+- [DELEGATE-CODER-001](docs/features/DELEGATE-CODER-001-contract-router/README.md)
+  — the opt-in strict single-file contract router, layered on 000.
+
+Read the pack matching the code you touch before changing it. Multi-file work is
+decomposed into bounded sequential contracts, and each decision log is the
+append-only record of design changes. Both features are single-repository, so no
+cross-repo plan is included.
 
 ## Contract mode (local Ollama)
 

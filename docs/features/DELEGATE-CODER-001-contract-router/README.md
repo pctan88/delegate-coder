@@ -8,6 +8,10 @@ Execution runs entirely against a local Ollama model, so code never leaves the
 machine — the privacy-safe path for confidential work, unlike hosted chat-agent
 workers.
 
+This feature layers on the foundational worker orchestration documented in
+[DELEGATE-CODER-000](../DELEGATE-CODER-000-worker-orchestration/README.md); the
+default `read`/`exec` adapters and benchmark policy are recorded there.
+
 | | |
 |---|---|
 | **Feature** | DELEGATE-CODER-001 — contract-driven local Qwen worker |
