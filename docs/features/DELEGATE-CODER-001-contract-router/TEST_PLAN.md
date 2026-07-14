@@ -1,0 +1,59 @@
+# Test Plan: Contract-driven local Qwen worker
+
+**Last updated:** 2026-07-14
+
+## Must-pass cases
+
+The primary suite is:
+
+```bash
+bash plugins/delegate-coder/skills/delegate-coder/tests/contract-router.test.sh
+```
+
+It must cover:
+
+| Case | Expected result |
+|---|---|
+| Valid JSON contract | Generates, tests, reports `PASS`, preserves clean stdout |
+| Stdin contract | Accepts the same schema from stdin |
+| Model/context/keep-alive propagation | Request contains configured values |
+| GPU preparation | Stops non-selected resident model and keeps selected model |
+| Newline sweep | Written file has exactly one trailing newline |
+| Regex fallback | Damaged wrapper is parsed for the three required fields |
+| Failed verification | Exactly one correction request includes exact failure output |
+| Passing unchanged output | Reports `NOOP` |
+| Second verification failure | Reports `FAIL` and makes no third request |
+| Truncated model response | Rejects `done_reason=length` without overwriting target |
+| New-file target | Creates a file when its existing parent is inside the repo |
+| Batch | Runs contracts sequentially and aggregates results |
+| Test timeout | Bounds the command and still applies the one-retry rule |
+| Traversal target | Rejects before Ollama is contacted |
+
+## Regression checks
+
+Run the existing shell/script checks relevant to a release, then inspect:
+
+```bash
+git diff --check
+git diff --stat
+```
+
+The v1 benchmark result remains a frozen artifact. Do not run the full benchmark
+against the current router without creating a new, separately named dataset and
+obtaining maintainer approval *(confirm process)*.
+
+## Manual checks
+
+- Point `OLLAMA_HOST` at a local server and run one harmless fixture contract.
+- Confirm `PASS`, `NOOP`, and `FAIL` exit codes from a shell caller.
+- Confirm `.claude/delegate-coder.log` receives contract start/end events and
+  that `/delegate stats` can summarize them.
+- Try a large fixture and confirm a context-length rejection leaves the source
+  unchanged.
+
+## Negative/security checks
+
+Reject absolute paths, `..` traversal, outside-repository resolution, symlinks,
+non-regular targets, missing parent directories, malformed required fields, and
+invalid numeric timeout/context settings. Treat `test_command` as trusted local
+code; the router does not sandbox arbitrary shell commands.
