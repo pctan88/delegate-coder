@@ -45,8 +45,10 @@ the delegated code path.
 - Resolve the worker from `DELEGATE_AGENT` or `.claude/delegate-coder.json`, and
   read `model`, `fallback`, `allow_paths`, and `command_override` from config.
 - Detect installed agents and infer the project test command.
-- Enforce `read` = read-only worker invocation; `exec` = change-making
-  invocation followed by orchestrator verification.
+- Request read-only or dry-run behavior for `read` where the worker adapter
+  supports it; `exec` uses a change-making invocation followed by orchestrator
+  verification. Gemini, Qwen, and OpenCode `read` invocations do not enforce a
+  read-only sandbox.
 - Write a JSON audit log of start/end events and summarize it with `stats.sh`.
 - Provide a `doctor` health check for install/auth status.
 - Provide an A/B benchmark harness that measures cost, tokens, turns, duration,
@@ -69,9 +71,10 @@ the delegated code path.
 2. The worker is resolved from `DELEGATE_AGENT` first, then the `agent` field in
    config; with neither set, the run exits non-zero and lists installed
    candidates.
-3. Each built-in adapter maps `read` to a read-only invocation and `exec` to a
-   change-making invocation; `model` is threaded into the correct per-agent flag
-   when present.
+3. Each built-in adapter maps `read` to its available read-only or dry-run
+   control and `exec` to a change-making invocation; adapters without an
+   enforced read-only control are documented as such. `model` is threaded into
+   the correct per-agent flag when present.
 4. `command_override` for the active mode replaces the built-in adapter, with
    `{task}` substituted.
 5. `fallback: strict` refuses to run natively when the agent is missing and

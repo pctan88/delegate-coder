@@ -20,7 +20,7 @@ It must cover:
 | No agent configured | Exit 3, lists installed candidates |
 | Agent from `DELEGATE_AGENT` | Adapter runs with the resolved agent |
 | Agent from config `agent` field | Same resolution from `.claude/delegate-coder.json` |
-| `read` vs `exec` mapping | Read-only flags for `read`; change-making flags for `exec` |
+| `read` vs `exec` mapping | Adapter-specific read-only/dry-run controls where supported; change-making flags for `exec` |
 | Model threading | Configured `model` appears in the worker argv |
 | `command_override` | Override runs with `{task}` substituted, bypassing the adapter |
 | Missing agent + `fallback: strict` | Exit 4 and a CRITICAL "do not do natively" message |

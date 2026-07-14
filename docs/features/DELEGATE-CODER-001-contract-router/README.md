@@ -4,9 +4,10 @@ Turn `delegate-coder` into a strict local execution harness for bounded,
 single-file edits while keeping Claude/Codex/other cloud orchestrators in the
 planning and acceptance role.
 
-Execution runs entirely against a local Ollama model, so code never leaves the
-machine — the privacy-safe path for confidential work, unlike hosted chat-agent
-workers.
+With the default `OLLAMA_HOST` (`http://127.0.0.1:11434`), execution runs
+against a loopback Ollama model, so code stays on the machine. If
+`OLLAMA_HOST` is overridden, file contents are sent to that endpoint and its
+privacy properties apply; this is unlike hosted chat-agent workers by default.
 
 This feature layers on the foundational worker orchestration documented in
 [DELEGATE-CODER-000](../DELEGATE-CODER-000-worker-orchestration/README.md); the

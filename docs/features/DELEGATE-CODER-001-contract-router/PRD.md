@@ -24,10 +24,12 @@ target, prepares Ollama, asks the local model for a complete file replacement,
 runs the supplied verification command, retries once with the exact failure log
 if needed, and returns status, target-only diff, and final test output.
 
-All generation runs against a local Ollama server, so file contents never leave
-the machine. Contract mode is therefore the privacy-safe execution path for
-employer or confidential code, in contrast to hosted chat-agent workers that send
-code to a third-party provider.
+With the default `OLLAMA_HOST` (`http://127.0.0.1:11434`), generation runs
+against a loopback Ollama server, so file contents stay on the machine. If
+`OLLAMA_HOST` is overridden, contents are sent to that endpoint and its privacy
+properties apply. Contract mode is therefore the privacy-safe execution path
+when its host remains loopback, in contrast to hosted chat-agent workers that
+send code to a third-party provider.
 
 ## Scope
 

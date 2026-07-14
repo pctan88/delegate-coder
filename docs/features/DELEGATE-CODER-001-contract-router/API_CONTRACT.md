@@ -76,6 +76,11 @@ generation errors. A batch report aggregates child reports and retries.
 | `DELEGATE_CURL_TIMEOUT` | `600` seconds |
 | `DELEGATE_TEST_TIMEOUT` | `300` seconds |
 
+The no-off-machine privacy claim applies only when `OLLAMA_HOST` remains at its
+default loopback value. The router intentionally permits an `OLLAMA_HOST`
+override; when it points to another machine or service, prompt contents are sent
+there and that endpoint's privacy policy applies.
+
 ## Audit event
 
 `delegate.sh` appends JSON start/end events containing agent, model, mode,

@@ -40,7 +40,8 @@ user request
        resolve agent (DELEGATE_AGENT > config) + model + fallback + allow_paths
        audit:start
        command_override? -> run it
-       else per-agent adapter: read = read-only flags; exec = change-making flags
+       else per-agent adapter: read = read-only/dry-run where supported;
+            exec = change-making flags
        audit:end (duration, exit_code)
        exec + allow_paths -> flag files changed outside the allowlist
   -> Claude verifies exec: git diff --stat + project test command
@@ -50,8 +51,11 @@ user request
 
 ## Trust and safety boundaries
 
-- `read` mode uses each agent's read-only invocation (plan / dry-run / read-only
-  sandbox) — zero write risk. `exec` mode makes changes and is always verified.
+- `read` mode requests the agent-specific plan, dry-run, or read-only sandbox
+  where one exists (MiMo, Aider, and Codex). Gemini, Qwen, and OpenCode have no
+  enforced read-only control in their current adapters, so `read` is not a
+  zero-write guarantee for those agents. `exec` mode makes changes and is
+  always verified.
 - Change isolation is Git branch + reviewable diff; the worker's summary is
   never accepted as proof.
 - `allow_paths` is a post-run prefix check over `git diff --name-only`; a

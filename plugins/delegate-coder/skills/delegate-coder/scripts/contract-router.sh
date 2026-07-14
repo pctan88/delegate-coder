@@ -176,15 +176,6 @@ fi
 export DISABLE_AUTOUPDATER=1
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
-if command -v ollama >/dev/null 2>&1; then
-  while IFS= read -r resident_model; do
-    [[ -n "$resident_model" && "$resident_model" != "$MODEL" ]] || continue
-    echo "contract-router: stopping resident Ollama model $resident_model" >&2
-    ollama stop "$resident_model" >/dev/null 2>&1 || \
-      echo "contract-router: warning: could not stop $resident_model" >&2
-  done < <(ollama ps 2>/dev/null | awk 'NR > 1 && NF { print $1 }')
-fi
-
 REQUEST_FILE="$WORK_DIR/request.json"
 RESPONSE_FILE="$WORK_DIR/response.json"
 GENERATED_FILE="$WORK_DIR/generated"
@@ -213,6 +204,13 @@ user = (
 if failure_path:
     failure = pathlib.Path(failure_path).read_text()
     user += f"\nThe verification command failed. Apply a correction and output the entire updated file again. Exact terminal error output:\n{failure}\n"
+prompt_bytes = len((system_prompt + user).encode("utf-8"))
+estimated_tokens = (prompt_bytes + 2) // 3
+if estimated_tokens > int(num_ctx):
+    raise SystemExit(
+        f"contract-router: estimated prompt size {estimated_tokens} tokens "
+        f"exceeds DELEGATE_NUM_CTX={num_ctx}"
+    )
 payload = {
     "model": model,
     "system": system_prompt,
@@ -224,6 +222,20 @@ payload = {
 pathlib.Path(request_path).write_text(json.dumps(payload))
 PY
 }
+
+# Run the complete initial prompt preflight before touching the Ollama process.
+# build_request also repeats the check for correction prompts, which include
+# the current file and the exact verification failure output.
+build_request || fail "initial prompt exceeds DELEGATE_NUM_CTX; target was not changed"
+
+if command -v ollama >/dev/null 2>&1; then
+  while IFS= read -r resident_model; do
+    [[ -n "$resident_model" && "$resident_model" != "$MODEL" ]] || continue
+    echo "contract-router: stopping resident Ollama model $resident_model" >&2
+    ollama stop "$resident_model" >/dev/null 2>&1 || \
+      echo "contract-router: warning: could not stop $resident_model" >&2
+  done < <(ollama ps 2>/dev/null | awk 'NR > 1 && NF { print $1 }')
+fi
 
 generate_file() {
   local failure_file="${1:-}"

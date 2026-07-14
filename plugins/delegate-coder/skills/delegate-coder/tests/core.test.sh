@@ -9,6 +9,24 @@ DISPATCH="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/delega
 DETECT_TEST="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/detect-test.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/delegate-coder-core-test.XXXXXX")"
 trap 'rm -rf "$TEST_ROOT"' EXIT
+mkdir -p "$TEST_ROOT/home"
+
+# The host may have a real worker installed. Keep the fixture's missing-agent
+# cases from finding or invoking it, while preserving the rest of the test
+# toolchain on PATH.
+REAL_CODEX="$(type -P codex 2>/dev/null || true)"
+REAL_CODEX_DIR="${REAL_CODEX%/*}"
+TEST_PATH=""
+IFS=: read -r -a PATH_PARTS <<< "${PATH:-}"
+for path_entry in "${PATH_PARTS[@]}"; do
+  [[ -n "$REAL_CODEX" && "$path_entry" == "$REAL_CODEX_DIR" ]] && continue
+  if [[ -z "$TEST_PATH" ]]; then
+    TEST_PATH="$path_entry"
+  else
+    TEST_PATH="$TEST_PATH:$path_entry"
+  fi
+done
+[[ -n "$TEST_PATH" ]] || TEST_PATH="/usr/bin:/bin"
 
 PASS=0
 fail() { echo "not ok - $*" >&2; exit 1; }
@@ -42,7 +60,15 @@ SH
   unset FAKE_TOUCH FAKE_EXIT DELEGATE_AGENT
 }
 
-run_dispatch() { ( cd "$CASE_DIR" && bash "$DISPATCH" "$@" ); }
+run_dispatch() {
+  (
+    cd "$CASE_DIR" || exit 1
+    HOME="$TEST_ROOT/home" \
+    PATH="$CASE_DIR/bin:$TEST_PATH" \
+    DELEGATE_PATH_EXTRA="$CASE_DIR/bin" \
+    bash "$DISPATCH" "$@"
+  )
+}
 
 # ── delegate.sh: argument validation ──────────────────────────────────────
 setup_case argval

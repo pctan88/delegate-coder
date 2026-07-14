@@ -59,16 +59,19 @@ an empty or missing file reproduces the benchmarked default path.
 
 ## Built-in adapters
 
-For each agent, `read` uses a read-only invocation and `exec` a change-making
-one. `model`, when set, is threaded into the per-agent flag.
+For each agent, `read` uses the available read-only or dry-run control, while
+`exec` uses a change-making invocation. `model`, when set, is threaded into the
+per-agent flag. Read-only enforcement is adapter-specific: Gemini, Qwen, and
+OpenCode currently have no enforced read-only control, so their `read` mode must
+not be treated as a zero-write guarantee.
 
 | Agent | `read` | `exec` |
 |---|---|---|
 | `mimo` | `mimo run <task> --agent plan …` (600s timeout) | `mimo run <task> …` (600s timeout) |
 | `aider` | `aider --message <task> --yes --dry-run` | `aider --message <task> --yes` |
 | `codex` | `codex exec <task> --sandbox read-only` | `codex exec <task> --sandbox workspace-write` |
-| `gemini` / `qwen` | `<agent> -p <task>` | `<agent> -p <task> --yolo` |
-| `opencode` | `opencode run <task>` (single mode) | `opencode run <task>` |
+| `gemini` / `qwen` | `<agent> -p <task>` (no enforced read-only control) | `<agent> -p <task> --yolo` |
+| `opencode` | `opencode run <task>` (no enforced read-only control) | `opencode run <task>` |
 | `custom` | requires `command_override.read` | requires `command_override.exec` |
 
 All invocations redirect stdin from `/dev/null` so a headless worker cannot hang
