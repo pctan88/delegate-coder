@@ -185,6 +185,21 @@ set -e
 contains "$CASE_DIR/stderr" 'done_reason=length' "truncation error should be explicit"
 pass "truncation guard"
 
+# An oversized complete input prompt is rejected before any Ollama HTTP
+# request or target replacement.
+setup_case promptguard
+make_contract target.txt "true" "$CASE_DIR/contract.json"
+set +e
+DELEGATE_NUM_CTX=1 run_dispatch "$(cat "$CASE_DIR/contract.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "oversized prompt should fail"
+[[ ! -s "$CASE_DIR/curl.count" ]] || fail "oversized prompt must not call Ollama"
+[[ ! -e "$CASE_DIR/request.1" ]] || fail "oversized prompt must not create a request"
+[[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "oversized prompt must not overwrite target"
+contains "$CASE_DIR/stderr" 'exceeds DELEGATE_NUM_CTX' "oversized prompt error should be explicit"
+pass "input prompt-size guard"
+
 # New files are allowed when their parent directory is inside the repository.
 setup_case newfile
 git -C "$CASE_DIR" rm -q target.txt

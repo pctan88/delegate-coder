@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# core.test.sh — deterministic tests for the foundational orchestration scripts
+# (delegate.sh dispatch/adapters/fallback/allow_paths/audit, detect-test.sh).
+# Uses a fake worker on PATH and temp fixtures; no real agent, network, or model.
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
+DISPATCH="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/delegate.sh"
+DETECT_TEST="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/detect-test.sh"
+TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/delegate-coder-core-test.XXXXXX")"
+trap 'rm -rf "$TEST_ROOT"' EXIT
+mkdir -p "$TEST_ROOT/home"
+
+# The host may have a real worker installed. Keep the fixture's missing-agent
+# cases from finding or invoking it, while preserving the rest of the test
+# toolchain on PATH. Those cases also use a deliberately nonexistent agent
+# name rather than a real adapter name.
+REAL_CODEX="$(type -P codex 2>/dev/null || true)"
+REAL_CODEX_DIR="${REAL_CODEX%/*}"
+TEST_PATH=""
+IFS=: read -r -a PATH_PARTS <<< "${PATH:-}"
+for path_entry in "${PATH_PARTS[@]}"; do
+  [[ -n "$REAL_CODEX" && "$path_entry" == "$REAL_CODEX_DIR" ]] && continue
+  if [[ -z "$TEST_PATH" ]]; then
+    TEST_PATH="$path_entry"
+  else
+    TEST_PATH="$TEST_PATH:$path_entry"
+  fi
+done
+[[ -n "$TEST_PATH" ]] || TEST_PATH="/usr/bin:/bin"
+
+PASS=0
+fail() { echo "not ok - $*" >&2; exit 1; }
+pass() { echo "ok - $*"; PASS=$((PASS + 1)); }
+contains() { grep -Fq -- "$2" "$1" || fail "$3"; }
+absent()   { grep -Fq -- "$2" "$1" && fail "$3"; return 0; }
+
+# Build a case dir: a git repo with a fake worker "codex" that records its argv
+# and (optionally) modifies a tracked file named by $FAKE_TOUCH.
+setup_case() {
+  CASE_DIR="$TEST_ROOT/$1"
+  mkdir -p "$CASE_DIR/bin" "$CASE_DIR/lib" "$CASE_DIR/src"
+  git -C "$CASE_DIR" init -q
+  git -C "$CASE_DIR" config user.email test@example.invalid
+  git -C "$CASE_DIR" config user.name test
+  printf 'a\n' > "$CASE_DIR/lib/keep.txt"
+  printf 'b\n' > "$CASE_DIR/src/other.txt"
+  git -C "$CASE_DIR" add -A
+  git -C "$CASE_DIR" commit -qm initial
+
+  cat > "$CASE_DIR/bin/codex" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FAKE_ARGV:?FAKE_ARGV required}"
+[[ -n "${FAKE_TOUCH:-}" ]] && printf 'changed\n' >> "$FAKE_TOUCH"
+exit "${FAKE_EXIT:-0}"
+SH
+  chmod +x "$CASE_DIR/bin/codex"
+  export DELEGATE_PATH_EXTRA="$CASE_DIR/bin"
+  export FAKE_ARGV="$CASE_DIR/argv.log"
+  : > "$FAKE_ARGV"
+  unset FAKE_TOUCH FAKE_EXIT DELEGATE_AGENT
+}
+
+run_dispatch() {
+  (
+    cd "$CASE_DIR" || exit 1
+    HOME="$TEST_ROOT/home" \
+    PATH="$CASE_DIR/bin:$TEST_PATH" \
+    DELEGATE_PATH_EXTRA="$CASE_DIR/bin" \
+    bash "$DISPATCH" "$@"
+  )
+}
+
+# ── delegate.sh: argument validation ──────────────────────────────────────
+setup_case argval
+run_dispatch bogus "task" >/dev/null 2>"$CASE_DIR/err"; rc=$?
+[[ $rc -eq 2 ]] || fail "invalid mode should exit 2 (got $rc)"
+contains "$CASE_DIR/err" "read" "invalid mode should print usage"
+pass "invalid mode exits 2 with usage"
+
+run_dispatch read "" >/dev/null 2>&1; rc=$?
+[[ $rc -eq 2 ]] || fail "empty task should exit 2 (got $rc)"
+pass "empty task exits 2"
+
+# ── delegate.sh: no agent configured ──────────────────────────────────────
+setup_case noagent
+run_dispatch read "summarize repo" >/dev/null 2>"$CASE_DIR/err"; rc=$?
+[[ $rc -eq 3 ]] || fail "no agent should exit 3 (got $rc)"
+contains "$CASE_DIR/err" "No worker agent configured" "should explain missing agent"
+pass "no agent configured exits 3"
+
+# ── delegate.sh: agent from DELEGATE_AGENT + read/exec mapping ─────────────
+setup_case fromenv
+DELEGATE_AGENT=codex run_dispatch read "understand src" >/dev/null 2>&1 || fail "env-agent read run failed"
+contains "$FAKE_ARGV" "read-only" "read mode should use --sandbox read-only"
+absent   "$FAKE_ARGV" "workspace-write" "read mode must not use workspace-write"
+pass "agent resolved from DELEGATE_AGENT; read maps to read-only"
+
+setup_case execmap
+DELEGATE_AGENT=codex run_dispatch exec "implement x" >/dev/null 2>&1 || fail "env-agent exec run failed"
+contains "$FAKE_ARGV" "workspace-write" "exec mode should use --sandbox workspace-write"
+pass "exec maps to workspace-write"
+
+# ── delegate.sh: agent + model from config ────────────────────────────────
+setup_case fromcfg
+mkdir -p "$CASE_DIR/.claude"
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
+{ "agent": "codex", "model": "gpt-x-mini" }
+JSON
+run_dispatch read "understand" >/dev/null 2>&1 || fail "config-agent run failed"
+contains "$FAKE_ARGV" "--model gpt-x-mini" "model from config should reach worker argv"
+pass "agent + model resolved from config file"
+
+# ── delegate.sh: command_override bypasses adapter ────────────────────────
+setup_case override
+mkdir -p "$CASE_DIR/.claude"
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
+{ "agent": "codex", "command_override": { "read": "echo OVERRIDE_RAN {task}" } }
+JSON
+out="$(run_dispatch read "hello-spec" 2>/dev/null)"
+grep -Fq "OVERRIDE_RAN hello-spec" <<<"$out" || fail "override should run with {task} substituted"
+[[ -s "$FAKE_ARGV" ]] && fail "override should bypass the built-in adapter"
+pass "command_override runs with {task} and bypasses adapter"
+
+# ── delegate.sh: fallback strict vs graceful when agent missing ───────────
+setup_case strict
+mkdir -p "$CASE_DIR/.claude"
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
+{ "agent": "delegate_coder_missing_agent_9fd0d3", "fallback": "strict" }
+JSON
+run_dispatch exec "do it" >/dev/null 2>"$CASE_DIR/err"; rc=$?
+[[ $rc -eq 4 ]] || fail "missing agent should exit 4 (got $rc)"
+contains "$CASE_DIR/err" "CRITICAL" "strict fallback should warn CRITICAL"
+pass "missing agent + strict exits 4 with CRITICAL"
+
+setup_case graceful
+mkdir -p "$CASE_DIR/.claude"
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
+{ "agent": "delegate_coder_missing_agent_9fd0d3", "fallback": "graceful" }
+JSON
+run_dispatch exec "do it" >/dev/null 2>"$CASE_DIR/err"; rc=$?
+[[ $rc -eq 4 ]] || fail "missing agent graceful should exit 4 (got $rc)"
+absent "$CASE_DIR/err" "CRITICAL" "graceful fallback must not print CRITICAL"
+pass "missing agent + graceful exits 4 without CRITICAL"
+
+# ── delegate.sh: allow_paths enforcement ──────────────────────────────────
+setup_case allowbad
+mkdir -p "$CASE_DIR/.claude"
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
+{ "agent": "codex", "allow_paths": ["lib/"] }
+JSON
+FAKE_TOUCH="$CASE_DIR/src/other.txt" DELEGATE_AGENT=codex run_dispatch exec "edit" >/dev/null 2>"$CASE_DIR/err"; rc=$?
+[[ $rc -eq 6 ]] || fail "out-of-scope change should exit 6 (got $rc)"
+contains "$CASE_DIR/err" "outside allow_paths" "should warn about allow_paths violation"
+pass "exec change outside allow_paths exits 6"
+
+setup_case allowok
+mkdir -p "$CASE_DIR/.claude"
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
+{ "agent": "codex", "allow_paths": ["lib/"] }
+JSON
+FAKE_TOUCH="$CASE_DIR/lib/keep.txt" DELEGATE_AGENT=codex run_dispatch exec "edit" >/dev/null 2>&1; rc=$?
+[[ $rc -eq 0 ]] || fail "in-scope change should exit 0 (got $rc)"
+pass "exec change inside allow_paths exits 0"
+
+# ── delegate.sh: audit log ────────────────────────────────────────────────
+setup_case audit
+DELEGATE_AGENT=codex run_dispatch read "understand" >/dev/null 2>&1 || fail "audit run failed"
+LOG="$CASE_DIR/.claude/delegate-coder.log"
+[[ -f "$LOG" ]] || fail "audit log should be created"
+contains "$LOG" '"event":"start"' "audit log should record start"
+contains "$LOG" '"event":"end"' "audit log should record end"
+contains "$LOG" '"agent":"codex"' "audit log should record agent"
+jq -e 'select(.event=="end") | .exit_code == 0' "$LOG" >/dev/null 2>&1 || fail "end event should carry exit_code"
+pass "audit log records start/end with agent and exit_code"
+
+# ── detect-test.sh: per-ecosystem inference ───────────────────────────────
+dt() { ( cd "$1" && bash "$DETECT_TEST" ); }
+mk() { mkdir -p "$TEST_ROOT/$1"; echo "$TEST_ROOT/$1"; }
+
+d="$(mk dt_npm)";   printf '{ "scripts": { "test": "jest" } }\n' > "$d/package.json"
+[[ "$(dt "$d")" == "npm test" ]] || fail "npm real test script -> npm test"
+pass "detect-test: npm real script"
+
+d="$(mk dt_npm_ph)"; printf '{ "scripts": { "test": "echo \\"Error: no test specified\\" && exit 1" } }\n' > "$d/package.json"
+[[ -z "$(dt "$d")" ]] || fail "npm placeholder should not resolve to npm test"
+pass "detect-test: npm placeholder ignored"
+
+d="$(mk dt_py)";    : > "$d/pytest.ini"
+[[ "$(dt "$d")" == "python3 -m pytest -q" ]] || fail "pytest.ini -> pytest"
+pass "detect-test: pytest"
+
+d="$(mk dt_go)";    : > "$d/go.mod"
+[[ "$(dt "$d")" == "go test ./..." ]] || fail "go.mod -> go test"
+pass "detect-test: go"
+
+d="$(mk dt_rust)";  : > "$d/Cargo.toml"
+[[ "$(dt "$d")" == "cargo test" ]] || fail "Cargo.toml -> cargo test"
+pass "detect-test: rust"
+
+d="$(mk dt_make)";  printf 'test:\n\techo hi\n' > "$d/Makefile"
+[[ "$(dt "$d")" == "make test" ]] || fail "Makefile test: -> make test"
+pass "detect-test: make"
+
+d="$(mk dt_none)"
+[[ -z "$(dt "$d")" ]] || fail "no markers -> empty"
+pass "detect-test: nothing recognized"
+
+echo "# all $PASS checks passed"

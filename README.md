@@ -74,6 +74,23 @@ curl -fsSL https://raw.githubusercontent.com/pctan88/delegate-coder/main/install
 
 Configuration details: [setup.md](plugins/delegate-coder/skills/delegate-coder/references/setup.md)
 
+## AI-first planning and tracking
+
+Implementation is documented as reviewable feature packs under `docs/features/`,
+each with a PRD, HLD, API contract, plan, test plan, decision log, and release
+checklist:
+
+- [DELEGATE-CODER-000](docs/features/DELEGATE-CODER-000-worker-orchestration/README.md)
+  — foundational worker orchestration: marketplace, `read`/`exec` adapters,
+  config surface, and benchmark harness.
+- [DELEGATE-CODER-001](docs/features/DELEGATE-CODER-001-contract-router/README.md)
+  — the opt-in strict single-file contract router, layered on 000.
+
+Read the pack matching the code you touch before changing it. Multi-file work is
+decomposed into bounded sequential contracts, and each decision log is the
+append-only record of design changes. Both features are single-repository, so no
+cross-repo plan is included.
+
 ## Contract mode (local Ollama)
 
 For a strict, low-token edit, send `delegate.sh` a Task Contract instead of a chat prompt. Keep contracts single-file and sequential: a three-file feature should be three contracts, never one exploratory multi-file request.
