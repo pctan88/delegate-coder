@@ -13,7 +13,12 @@ contains() { grep -Fq -- "$2" "$1" || fail "$3"; }
 
 setup_case() {
   CASE_DIR="$TEST_ROOT/$1"
+  CURL_COUNT_FILE_PATH="$TEST_ROOT/$1.curl.count"
+  ARTIFACT_DIR="$TEST_ROOT/$1-artifacts"
+  STDOUT_PATH="$ARTIFACT_DIR/stdout"
+  STDERR_PATH="$ARTIFACT_DIR/stderr"
   mkdir -p "$CASE_DIR/bin"
+  mkdir -p "$ARTIFACT_DIR"
   git -C "$CASE_DIR" init -q
   git -C "$CASE_DIR" config user.email test@example.invalid
   git -C "$CASE_DIR" config user.name test
@@ -74,9 +79,11 @@ fi
 mode="${CURL_MODE:-good}"
 content=good
 if [[ "$mode" == outside ]]; then printf 'changed\n' > outside.txt; fi
+if [[ "$mode" == outside-new ]]; then printf 'changed\n' > new-outside.txt; fi
 if [[ "$mode" == retry && "$count" -eq 1 ]]; then content=bad; fi
 if [[ "$mode" == bad ]]; then content=bad; fi
 if [[ "$mode" == batch-fail && "$count" -le 2 ]]; then content=bad; fi
+if [[ "$mode" == batch-later && "$count" -ge 2 ]]; then content=bad; fi
 if [[ "$mode" == noop ]]; then content=original; fi
 if [[ "$mode" == batch-noop && "$count" -eq 2 ]]; then content=original; fi
 if [[ "$mode" == nested ]]; then content=$'before\n```markdown\ninner\n```\nafter\n'; fi
@@ -114,10 +121,10 @@ SH
   git -C "$CASE_DIR" add bin
   git -C "$CASE_DIR" commit -qm fixtures
   printf 'NAME ID SIZE PROCESSOR UNTIL\nold-model abc 1GB 100%% 1m\nqwen3-coder:30b def 1GB 100%% 1m\n' > "$CASE_DIR/ollama.ps"
-  : > "$CASE_DIR/ollama.stops"
-  : > "$CASE_DIR/curl.count"
-  : > "$CASE_DIR/curl.args"
-  : > "$CASE_DIR/curl.order"
+  : > "$ARTIFACT_DIR/ollama.stops"
+  : > "$CURL_COUNT_FILE_PATH"
+  : > "$ARTIFACT_DIR/curl.args"
+  : > "$ARTIFACT_DIR/curl.order"
 }
 
 make_contract() {
@@ -131,19 +138,40 @@ run_dispatch() {
     cd "$CASE_DIR" || exit 1
     PATH="$CASE_DIR/bin:$PATH" \
     OLLAMA_PS_FILE="$CASE_DIR/ollama.ps" \
-    OLLAMA_STOP_LOG="$CASE_DIR/ollama.stops" \
-    CURL_COUNT_FILE="$CASE_DIR/curl.count" \
-    CURL_REQUEST_PREFIX="$CASE_DIR/request." \
-    CURL_ENV_FILE="$CASE_DIR/curl.env" \
-    CURL_ARGS_FILE="$CASE_DIR/curl.args" \
-    CURL_ORDER_FILE="$CASE_DIR/curl.order" \
+    OLLAMA_STOP_LOG="$ARTIFACT_DIR/ollama.stops" \
+    CURL_COUNT_FILE="$CURL_COUNT_FILE_PATH" \
+    CURL_REQUEST_PREFIX="$ARTIFACT_DIR/request." \
+    CURL_ENV_FILE="$ARTIFACT_DIR/curl.env" \
+    CURL_ARGS_FILE="$ARTIFACT_DIR/curl.args" \
+    CURL_ORDER_FILE="$ARTIFACT_DIR/curl.order" \
     OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}" \
     CURL_MODE="${CURL_MODE:-good}" \
     DELEGATE_MODEL="${DELEGATE_MODEL:-qwen3-coder:30b}" \
     DELEGATE_NUM_CTX="${DELEGATE_NUM_CTX:-32768}" \
     DELEGATE_KEEP_ALIVE="${DELEGATE_KEEP_ALIVE:-30m}" \
     DELEGATE_TEST_TIMEOUT="${DELEGATE_TEST_TIMEOUT:-300}" \
-    bash "$DISPATCH" contract "$1" > "$CASE_DIR/stdout" 2> "$CASE_DIR/stderr"
+    bash "$DISPATCH" contract "$1" > "$STDOUT_PATH" 2> "$STDERR_PATH"
+  )
+}
+
+run_router_direct() {
+  (
+    cd "$CASE_DIR" || exit 1
+    PATH="$CASE_DIR/bin:$PATH" \
+    OLLAMA_PS_FILE="$CASE_DIR/ollama.ps" \
+    OLLAMA_STOP_LOG="$ARTIFACT_DIR/ollama.stops" \
+    CURL_COUNT_FILE="$CURL_COUNT_FILE_PATH" \
+    CURL_REQUEST_PREFIX="$ARTIFACT_DIR/request.direct." \
+    CURL_ENV_FILE="$ARTIFACT_DIR/curl.env.direct" \
+    CURL_ARGS_FILE="$ARTIFACT_DIR/curl.args.direct" \
+    CURL_ORDER_FILE="$ARTIFACT_DIR/curl.order.direct" \
+    OLLAMA_HOST=http://127.0.0.1:11434 \
+    CURL_MODE="${CURL_MODE:-good}" \
+    DELEGATE_MODEL=qwen3-coder:30b \
+    DELEGATE_NUM_CTX=32768 \
+    DELEGATE_KEEP_ALIVE=30m \
+    DELEGATE_TEST_TIMEOUT=300 \
+    bash "$ROUTER" "$1" > "$ARTIFACT_DIR/direct.stdout" 2> "$ARTIFACT_DIR/direct.stderr"
   )
 }
 
@@ -152,20 +180,20 @@ run_dispatch() {
 setup_case valid
 make_contract target.txt "grep -q '^good$' target.txt" "$CASE_DIR/contract.json"
 if ! run_dispatch "$(cat "$CASE_DIR/contract.json")"; then fail "valid contract should pass"; fi
-contains "$CASE_DIR/stdout" '- Status: PASS' "successful report status"
-contains "$CASE_DIR/stdout" '## Git diff' "successful report diff heading"
-[[ "$(cat "$CASE_DIR/ollama.stops")" == old-model ]] || fail "only non-target Ollama model should be stopped"
-[[ "$(cat "$CASE_DIR/curl.env")" == $'1\n1' ]] || fail "headless environment variables should be exported"
-contains "$CASE_DIR/request.1" '"model": "qwen3-coder:30b"' "configured model should reach Ollama"
-contains "$CASE_DIR/request.1" '"num_ctx": 32768' "context limit should reach Ollama"
-contains "$CASE_DIR/request.1" '"keep_alive": "30m"' "keep-alive should reach Ollama"
+contains "$STDOUT_PATH" '- Status: PASS' "successful report status"
+contains "$STDOUT_PATH" '## Git diff' "successful report diff heading"
+[[ "$(cat "$ARTIFACT_DIR/ollama.stops")" == old-model ]] || fail "only non-target Ollama model should be stopped"
+[[ "$(cat "$ARTIFACT_DIR/curl.env")" == $'1\n1' ]] || fail "headless environment variables should be exported"
+contains "$ARTIFACT_DIR/request.1" '"model": "qwen3-coder:30b"' "configured model should reach Ollama"
+contains "$ARTIFACT_DIR/request.1" '"num_ctx": 32768' "context limit should reach Ollama"
+contains "$ARTIFACT_DIR/request.1" '"keep_alive": "30m"' "keep-alive should reach Ollama"
 python3 - "$CASE_DIR/target.txt" <<'PY' || fail "generated file should have exactly one trailing newline"
 import pathlib, sys
 data = pathlib.Path(sys.argv[1]).read_bytes()
 assert data.endswith(b"\n") and not data.endswith(b"\n\n")
 PY
 [[ "$(stat -f '%Lp' "$CASE_DIR/target.txt" 2>/dev/null || stat -c '%a' "$CASE_DIR/target.txt")" == 640 ]] || fail "target mode should be preserved"
-! grep -Fq 'contract-router:' "$CASE_DIR/stdout" || fail "progress must not pollute stdout"
+! grep -Fq 'contract-router:' "$STDOUT_PATH" || fail "progress must not pollute stdout"
 pass "valid JSON contract and clean report"
 VALID_DIR="$CASE_DIR"
 
@@ -192,8 +220,8 @@ for malformed_mode in malformed empty additional; do
   set -e
   [[ "$status" -ne 0 ]] || fail "$malformed_mode structured output should fail"
   [[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "$malformed_mode output must not change target"
-  [[ "$(cat "$CASE_DIR/curl.count")" == 1 ]] || fail "$malformed_mode should stop after parser rejection"
-  contains "$CASE_DIR/stdout" '- Restored: false' "$malformed_mode parser failure should report no write"
+  [[ "$(cat "$CURL_COUNT_FILE_PATH")" == 1 ]] || fail "$malformed_mode should stop after parser rejection (count=$(cat "$CURL_COUNT_FILE_PATH"))"
+  contains "$STDOUT_PATH" '- Restored: false' "$malformed_mode parser failure should report no write"
 done
 pass "strict structured-output validation"
 
@@ -205,11 +233,11 @@ if ! (
   PATH="$CASE_DIR/bin:$PATH" \
     OLLAMA_PS_FILE="$CASE_DIR/ollama.ps" \
     OLLAMA_STOP_LOG="$CASE_DIR/ollama.stops" \
-    CURL_COUNT_FILE="$CASE_DIR/curl.count" \
-    CURL_REQUEST_PREFIX="$CASE_DIR/request.stdin." \
-    CURL_ENV_FILE="$CASE_DIR/curl.env.stdin" \
-    CURL_ARGS_FILE="$CASE_DIR/curl.args.stdin" \
-    CURL_ORDER_FILE="$CASE_DIR/curl.order.stdin" \
+    CURL_COUNT_FILE="$CURL_COUNT_FILE_PATH" \
+    CURL_REQUEST_PREFIX="$ARTIFACT_DIR/request.stdin." \
+    CURL_ENV_FILE="$ARTIFACT_DIR/curl.env.stdin" \
+    CURL_ARGS_FILE="$ARTIFACT_DIR/curl.args.stdin" \
+    CURL_ORDER_FILE="$ARTIFACT_DIR/curl.order.stdin" \
     CURL_MODE=good \
     bash "$DISPATCH" contract < "$CASE_DIR/contract.json" > "$CASE_DIR/stdin.stdout" 2> "$CASE_DIR/stdin.stderr"
 ); then
@@ -228,16 +256,16 @@ contains "$VALID_DIR/.claude/delegate-coder.log" '"retries":0' "audit should rec
 setup_case fallback
 fallback_contract='wrapped text {"target_file":"target.txt","instructions":"write the requested fixture","test_command":"grep -q '\''^good$'\'' target.txt"} trailing text'
 CURL_MODE=retry run_dispatch "$fallback_contract" || fail "regex fallback should pass after one retry"
-[[ "$(cat "$CASE_DIR/curl.count")" == 2 ]] || fail "failed verification should cause exactly one retry"
-contains "$CASE_DIR/request.2" 'bad' "retry request should include current generated file"
-contains "$CASE_DIR/request.2" 'verification command failed' "retry request should include failure context"
+[[ "$(cat "$CURL_COUNT_FILE_PATH")" == 2 ]] || fail "failed verification should cause exactly one retry"
+contains "$ARTIFACT_DIR/request.2" 'bad' "retry request should include current generated file"
+contains "$ARTIFACT_DIR/request.2" 'verification command failed' "retry request should include failure context"
 pass "regex fallback and one self-correction"
 
 # A passing test with unchanged output is explicitly reported as NOOP.
 setup_case noop
 make_contract target.txt "true" "$CASE_DIR/contract.json"
 CURL_MODE=noop run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "noop contract should pass"
-contains "$CASE_DIR/stdout" '- Status: NOOP' "unchanged output should be reported as NOOP"
+contains "$STDOUT_PATH" '- Status: NOOP' "unchanged output should be reported as NOOP"
 pass "empty-diff detection"
 
 # A second failure is returned without a third generation attempt.
@@ -248,10 +276,10 @@ CURL_MODE=bad run_dispatch "$(cat "$CASE_DIR/contract.json")"
 status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "final failed verification should return nonzero"
-[[ "$(cat "$CASE_DIR/curl.count")" == 2 ]] || fail "router must not make a third generation"
+[[ "$(cat "$CURL_COUNT_FILE_PATH")" == 2 ]] || fail "router must not make a third generation"
 [[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "failed verification must restore the existing target"
-contains "$CASE_DIR/stdout" '- Restored: true' "failed verification should report restoration"
-contains "$CASE_DIR/stdout" '- Status: FAIL' "failed report status"
+contains "$STDOUT_PATH" '- Restored: true' "failed verification should report restoration"
+contains "$STDOUT_PATH" '- Status: FAIL' "failed report status"
 pass "retry limit and failed report"
 
 # A failed new-file contract removes the attempted file transactionally.
@@ -265,7 +293,7 @@ status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "failed new-file contract should return nonzero"
 [[ ! -e "$CASE_DIR/new.txt" ]] || fail "failed new-file contract must remove target"
-contains "$CASE_DIR/stdout" '- Restored: true' "new-file failure should report restoration"
+contains "$STDOUT_PATH" '- Restored: true' "new-file failure should report restoration"
 pass "transactional new-file rollback"
 
 # A model response cut off by the context limit is rejected before replacement.
@@ -277,7 +305,7 @@ status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "truncated response should fail"
 [[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "truncated response must not overwrite target"
-contains "$CASE_DIR/stderr" 'done_reason=length' "truncation error should be explicit"
+contains "$STDERR_PATH" 'done_reason=length' "truncation error should be explicit"
 pass "truncation guard"
 
 # An oversized complete input prompt is rejected before any Ollama HTTP
@@ -289,10 +317,10 @@ DELEGATE_NUM_CTX=1 run_dispatch "$(cat "$CASE_DIR/contract.json")"
 status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "oversized prompt should fail"
-[[ ! -s "$CASE_DIR/curl.count" ]] || fail "oversized prompt must not call Ollama"
-[[ ! -e "$CASE_DIR/request.1" ]] || fail "oversized prompt must not create a request"
+[[ ! -s "$CURL_COUNT_FILE_PATH" ]] || fail "oversized prompt must not call Ollama"
+[[ ! -e "$ARTIFACT_DIR/request.1" ]] || fail "oversized prompt must not create a request"
 [[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "oversized prompt must not overwrite target"
-contains "$CASE_DIR/stderr" 'exceeds DELEGATE_NUM_CTX' "oversized prompt error should be explicit"
+contains "$STDERR_PATH" 'exceeds DELEGATE_NUM_CTX' "oversized prompt error should be explicit"
 pass "input prompt-size guard"
 
 # New files are allowed when their parent directory is inside the repository.
@@ -302,7 +330,7 @@ git -C "$CASE_DIR" commit -qm remove-target
 make_contract new.txt "grep -q '^good$' new.txt" "$CASE_DIR/contract.json"
 run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "new-file contract should pass"
 [[ -f "$CASE_DIR/new.txt" ]] || fail "new-file contract should create target"
-contains "$CASE_DIR/stdout" '- Status: PASS' "new-file report status"
+contains "$STDOUT_PATH" '- Status: PASS' "new-file report status"
 pass "new-file target support"
 
 # A top-level array runs sequentially and returns one combined report.
@@ -320,15 +348,15 @@ PY
 git -C "$CASE_DIR" add f*.txt
 git -C "$CASE_DIR" commit -qm batch-targets
 CURL_MODE=good run_dispatch "$(cat "$CASE_DIR/batch.json")" || fail "contract batch should pass"
-[[ "$(cat "$CASE_DIR/curl.count")" == 12 ]] || fail "batch should generate each contract once"
+[[ "$(cat "$CURL_COUNT_FILE_PATH")" == 12 ]] || fail "batch should generate each contract once"
 expected_order="$(printf 'f%02d.txt\n' {1..12})"
-[[ "$(cat "$CASE_DIR/curl.order")" == "$expected_order" ]] || fail "batch must preserve exact JSON-array order"
-contains "$CASE_DIR/stdout" '# Contract Batch Result' "batch report heading"
-contains "$CASE_DIR/stdout" '## Contract 1' "batch report first contract"
-contains "$CASE_DIR/stdout" '## Contract 12' "batch report twelfth contract"
-contains "$CASE_DIR/stdout" -- '- Status: PASS' "batch should aggregate as PASS"
-contains "$CASE_DIR/stdout" '- Completed: 12' "batch should report completed count"
-contains "$CASE_DIR/stdout" '- Skipped: 0' "batch should report skipped count"
+[[ "$(cat "$ARTIFACT_DIR/curl.order")" == "$expected_order" ]] || fail "batch must preserve exact JSON-array order"
+contains "$STDOUT_PATH" '# Contract Batch Result' "batch report heading"
+contains "$STDOUT_PATH" '## Contract 1' "batch report first contract"
+contains "$STDOUT_PATH" '## Contract 12' "batch report twelfth contract"
+contains "$STDOUT_PATH" -- '- Status: PASS' "batch should aggregate as PASS"
+contains "$STDOUT_PATH" '- Completed: 12' "batch should report completed count"
+contains "$STDOUT_PATH" '- Skipped: 0' "batch should report skipped count"
 contains "$CASE_DIR/.claude/delegate-coder.log" '"status":"PASS"' "batch audit should use aggregate status"
 pass "ordered sequential contract batch"
 
@@ -349,12 +377,12 @@ CURL_MODE=batch-fail run_dispatch "$(cat "$CASE_DIR/batch.json")"
 status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "failed batch should return nonzero"
-[[ "$(cat "$CASE_DIR/curl.count")" == 2 ]] || fail "failed child should retry once and skip later children"
+[[ "$(cat "$CURL_COUNT_FILE_PATH")" == 2 ]] || fail "failed child should retry once and skip later children"
 [[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "failed batch child should be restored"
-[[ ! -s "$CASE_DIR/curl.order" || "$(cat "$CASE_DIR/curl.order")" == $'target.txt\ntarget.txt' ]] || fail "later child must never be requested"
-contains "$CASE_DIR/stdout" '- Completed: 0' "failed batch completed count"
-contains "$CASE_DIR/stdout" '- Failed: 1' "failed batch failed count"
-contains "$CASE_DIR/stdout" '- Skipped: 1' "failed batch skipped count"
+[[ ! -s "$ARTIFACT_DIR/curl.order" || "$(cat "$ARTIFACT_DIR/curl.order")" == $'target.txt\ntarget.txt' ]] || fail "later child must never be requested"
+contains "$STDOUT_PATH" '- Completed: 0' "failed batch completed count"
+contains "$STDOUT_PATH" '- Failed: 1' "failed batch failed count"
+contains "$STDOUT_PATH" '- Skipped: 1' "failed batch skipped count"
 pass "stop-on-failure batch semantics"
 
 # Verification commands are bounded and still receive the single retry.
@@ -365,7 +393,7 @@ DELEGATE_TEST_TIMEOUT=1 run_dispatch "$(cat "$CASE_DIR/contract.json")"
 status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "timed-out verification should fail"
-[[ "$(cat "$CASE_DIR/curl.count")" == 2 ]] || fail "timed-out verification should receive one retry"
+[[ "$(cat "$CURL_COUNT_FILE_PATH")" == 2 ]] || fail "timed-out verification should receive one retry"
 pass "verification timeout"
 
 # Strictly positive limits are rejected before generation.
@@ -376,8 +404,8 @@ DELEGATE_NUM_CTX=0 run_dispatch "$(cat "$CASE_DIR/contract.json")"
 status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "zero context must fail"
-[[ ! -s "$CASE_DIR/curl.count" ]] || fail "zero context must not call Ollama"
-contains "$CASE_DIR/stderr" 'strictly positive integer' "zero context error"
+[[ ! -s "$CURL_COUNT_FILE_PATH" ]] || fail "zero context must not call Ollama"
+contains "$STDERR_PATH" 'strictly positive integer' "zero context error"
 pass "positive integer limits"
 
 # Loopback Ollama bypasses proxies explicitly; remote Ollama preserves proxy
@@ -385,11 +413,11 @@ pass "positive integer limits"
 setup_case loopback
 make_contract target.txt "true" "$CASE_DIR/contract.json"
 OLLAMA_HOST=http://localhost:11434 run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "loopback host should pass"
-grep -Fxq -- '--noproxy' "$CASE_DIR/curl.args" || fail "loopback request should force proxy bypass"
+grep -Fxq -- '--noproxy' "$ARTIFACT_DIR/curl.args" || fail "loopback request should force proxy bypass"
 setup_case remote
 make_contract target.txt "true" "$CASE_DIR/contract.json"
 OLLAMA_HOST=http://remote.example:11434 run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "remote host fixture should pass"
-! grep -Fxq -- '--noproxy' "$CASE_DIR/curl.args" || fail "remote request should preserve proxy behavior"
+! grep -Fxq -- '--noproxy' "$ARTIFACT_DIR/curl.args" || fail "remote request should preserve proxy behavior"
 pass "loopback and remote proxy handling"
 
 # The target and the whole worktree must be clean before contract execution.
@@ -401,9 +429,60 @@ run_dispatch "$(cat "$CASE_DIR/contract.json")"
 status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "dirty worktree must fail"
-[[ ! -s "$CASE_DIR/curl.count" ]] || fail "dirty worktree must not call Ollama"
-contains "$CASE_DIR/stderr" 'clean worktree' "dirty worktree error"
+[[ ! -s "$CURL_COUNT_FILE_PATH" ]] || fail "dirty worktree must not call Ollama"
+contains "$STDERR_PATH" 'clean worktree' "dirty worktree error"
 pass "clean-worktree requirement"
+
+# Dispatcher preflight validates cleanliness before creating a branch.
+setup_case dirty-main
+git -C "$CASE_DIR" branch -M main
+printf 'dirty\n' >> "$CASE_DIR/target.txt"
+make_contract target.txt "true" "$CASE_DIR/contract.json"
+set +e
+run_dispatch "$(cat "$CASE_DIR/contract.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "dirty main dispatcher invocation must fail"
+[[ "$(git -C "$CASE_DIR" branch --show-current)" == main ]] || fail "dirty dispatcher must remain on main"
+[[ -z "$(git -C "$CASE_DIR" branch --list 'delegate/contract-*')" ]] || fail "dirty dispatcher must not create a delegate branch"
+pass "dispatcher validates before branch creation"
+
+# Direct router preflight rejects malformed input before branch creation.
+setup_case malformed-main
+git -C "$CASE_DIR" branch -M main
+set +e
+run_router_direct '{not valid contract'
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "malformed direct contract must fail"
+[[ "$(git -C "$CASE_DIR" branch --show-current)" == main ]] || fail "malformed direct contract must remain on main"
+[[ -z "$(git -C "$CASE_DIR" branch --list 'delegate/contract-*')" ]] || fail "malformed direct contract must not create a delegate branch"
+pass "direct router validates before branch creation"
+
+# A consumer repository without a .claude ignore rule gets an idempotent local
+# exclusion, and sequential contracts leave only accepted target changes.
+setup_case consumer-log
+sed -i.bak '/^\/.claude\/$/d' "$CASE_DIR/.gitignore"
+rm -f "$CASE_DIR/.gitignore.bak"
+git -C "$CASE_DIR" add .gitignore
+git -C "$CASE_DIR" commit -qm consumer-no-claude-ignore
+printf 'original\n' > "$CASE_DIR/second.txt"
+git -C "$CASE_DIR" add second.txt
+git -C "$CASE_DIR" commit -qm consumer-second-target
+python3 - "$CASE_DIR/batch.json" <<'PY'
+import json, sys
+json.dump([
+    {"target_file": "target.txt", "instructions": "first", "test_command": "grep -q '^good$' target.txt"},
+    {"target_file": "second.txt", "instructions": "second", "test_command": "grep -q '^good$' second.txt"},
+], open(sys.argv[1], "w"))
+PY
+CURL_MODE=good run_dispatch "$(cat "$CASE_DIR/batch.json")" || fail "consumer sequential contracts should pass"
+[[ -f "$CASE_DIR/.claude/delegate-coder.log" ]] || fail "consumer audit log should remain available"
+EXCLUDE_FILE="$(cd "$CASE_DIR" && git rev-parse --git-path info/exclude)"
+[[ "$EXCLUDE_FILE" == /* ]] || EXCLUDE_FILE="$CASE_DIR/$EXCLUDE_FILE"
+grep -Fxq '/.claude/' "$EXCLUDE_FILE" || fail "runtime log exclusion should be idempotently configured"
+[[ "$(git -C "$CASE_DIR" status --porcelain --untracked-files=all)" == $' M second.txt\n M target.txt' ]] || fail "consumer worktree should contain only accepted target changes"
+pass "consumer audit log does not dirty worktree"
 
 # Any change outside the declared target is rejected and the target is restored.
 setup_case outside
@@ -417,8 +496,45 @@ status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "outside-target change must fail"
 [[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "outside-target failure must restore target"
-contains "$CASE_DIR/stdout" 'verification changed files outside target_file' "outside-target error"
+printf 'untouched\n' | cmp -s - "$CASE_DIR/outside.txt" || fail "outside tracked file must be restored byte-for-byte"
+[[ "$(stat -f '%Lp' "$CASE_DIR/outside.txt" 2>/dev/null || stat -c '%a' "$CASE_DIR/outside.txt")" == 644 ]] || fail "outside tracked file mode must be restored"
+contains "$STDOUT_PATH" 'verification changed files outside target_file' "outside-target error"
 pass "outside-target change detection"
+
+# A newly created untracked outside file is removed on failure.
+setup_case outside-new
+make_contract target.txt "true" "$CASE_DIR/contract.json"
+set +e
+CURL_MODE=outside-new run_dispatch "$(cat "$CASE_DIR/contract.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "new outside-target change must fail"
+[[ ! -e "$CASE_DIR/new-outside.txt" ]] || fail "new outside-target file must be removed"
+[[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "new outside-target failure must restore target"
+pass "untracked outside-target rollback"
+
+# Earlier accepted children remain on the isolated branch when a later child
+# fails and is restored.
+setup_case batch-later
+printf 'original\n' > "$CASE_DIR/second.txt"
+git -C "$CASE_DIR" add second.txt
+git -C "$CASE_DIR" commit -qm second
+python3 - "$CASE_DIR/batch.json" <<'PY'
+import json, sys
+json.dump([
+    {"target_file": "target.txt", "instructions": "pass", "test_command": "grep -q '^good$' target.txt"},
+    {"target_file": "second.txt", "instructions": "fail", "test_command": "grep -q '^good$' second.txt"},
+], open(sys.argv[1], "w"))
+PY
+set +e
+CURL_MODE=batch-later run_dispatch "$(cat "$CASE_DIR/batch.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "later failed batch child should return nonzero"
+printf 'good\n' | cmp -s - "$CASE_DIR/target.txt" || fail "earlier accepted batch target must survive"
+printf 'original\n' | cmp -s - "$CASE_DIR/second.txt" || fail "failed later batch target must be restored"
+contains "$STDOUT_PATH" '- Completed: 1' "later failed batch completed count"
+pass "batch rollback preserves earlier accepted child"
 
 # Traversal is rejected before Ollama is contacted.
 setup_case traversal
@@ -428,8 +544,8 @@ run_dispatch "$(cat "$CASE_DIR/contract.json")"
 status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "traversal target should be rejected"
-[[ ! -s "$CASE_DIR/curl.count" ]] || fail "rejected target must not call Ollama"
-contains "$CASE_DIR/stdout" 'relative path without traversal' "traversal error"
+[[ ! -s "$CURL_COUNT_FILE_PATH" ]] || fail "rejected target must not call Ollama"
+contains "$STDOUT_PATH" 'relative path without traversal' "traversal error"
 pass "path traversal rejection"
 
 # Contract mode is never attempted outside a Git worktree.

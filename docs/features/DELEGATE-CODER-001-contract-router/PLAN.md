@@ -27,9 +27,10 @@ acceptance evidence for future maintenance.
 
 1. Confirm whether the requested change is contract mode, existing `read`/`exec`
    mode, or documentation only.
-2. For contract mode, require a clean isolated branch, keep one target file per
-   contract, snapshot bytes/mode/existence, and preserve the structured input,
-   output, timeout, rollback, and retry semantics in `API_CONTRACT.md`.
+2. For contract mode, validate the contract and cleanliness before creating a
+   clean isolated branch, keep one target file per contract, snapshot
+   bytes/mode/existence plus the child worktree, and preserve the structured
+   input, output, timeout, rollback, and retry semantics in `API_CONTRACT.md`.
 3. Add or update deterministic fake-Ollama tests before changing router behavior.
 4. Run the contract-router suite, core suite, deterministic benchmark reporter
    tests, and `git diff --check`.
@@ -44,8 +45,9 @@ acceptance evidence for future maintenance.
   `(confirm)`.
 - Existing adapters remain compatible.
 - Reports keep stdout machine/cloud-consumable and stderr operational.
-- Failed candidates never remain in the worktree; reports include restoration,
-  attributable pre-contract diff, batch counts, and Ollama metrics.
+- Failed candidates or outside-target mutations never remain in the worktree;
+  reports include restoration, attributable pre-contract diff, batch counts, and
+  Ollama metrics. Earlier accepted batch children remain intact.
 - The local benchmark is additive, five-warm, and never modifies the frozen v1
   results or raw data.
 - No unrelated files or benchmark artifacts are changed.

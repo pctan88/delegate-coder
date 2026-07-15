@@ -20,11 +20,13 @@ needs a small, deterministic execution unit with an objective result.
 ## User flow
 
 The orchestrator submits a JSON Task Contract. `delegate-coder` validates the
-target and clean isolated branch, snapshots it, prepares Ollama, asks the local
-model for a complete structured file replacement, verifies a staged candidate,
-restores unsuccessful work transactionally, retries once with the exact failure
-log if needed, and returns status, restoration state, attributable diff, model
-metrics, and final test output.
+contract and clean worktree before creating an isolated branch, snapshots the
+target and child worktree state, prepares Ollama, asks the local model for a
+complete structured file replacement, verifies a staged candidate, restores
+unsuccessful work transactionally (including outside-target tracked and
+untracked mutations), retries once with the exact failure log if needed, and
+returns status, restoration state, attributable diff, model metrics, and final
+test output.
 
 With the default `OLLAMA_HOST` (`http://127.0.0.1:11434`), generation runs
 against a loopback Ollama server, so file contents stay on the machine. If
@@ -43,16 +45,21 @@ send code to a third-party provider.
   temperature `0`, UTF-8 preservation, and exactly one trailing newline.
 - Stop resident Ollama models other than the selected model before generation.
 - Require a Git worktree, clean target/worktree, and isolated feature/delegate
-  branch; enforce repository-relative, non-symlink target boundaries.
+  branch; validate shape, path, and bounded-runner preconditions before branch
+  creation; enforce repository-relative, non-symlink target boundaries.
 - Stage candidates on the target path for tests, promote only after success, and
-  restore existing content/mode or remove new files on every failure.
+  restore existing content/mode, modified tracked outside files, and new
+  untracked outside files on every failure. Preserve earlier accepted batch
+  children.
 - Apply newline normalization, context truncation protection, bounded generation
   and test timeouts, one correction retry, and explicit `NOOP` status.
 - Record contract start/end status, duration, model, exit code, and retries in
-  the existing audit log.
+  the existing audit log; keep that log ignored through `.git/info/exclude`
+  without editing a tracked consumer ignore file.
 - Capture all Ollama timing/token counters and detect changes outside the target.
-- Provide an additive five-warm-repetition local benchmark and deterministic
-  reporter fixtures; preserve the historical Claude+MiMo v1 data.
+- Provide an additive five-warm-repetition local benchmark, a deterministic
+  no-live-model runner test, and a JSONL reporter that reproduces the frozen
+  24-A/24-B aggregate; preserve the historical Claude+MiMo v1 data.
 - Document the contract protocol and verify it with deterministic shell tests.
 
 ## Out of scope

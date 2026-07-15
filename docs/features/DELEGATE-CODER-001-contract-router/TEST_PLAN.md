@@ -26,7 +26,7 @@ It must cover:
 | Passing unchanged output | Reports `NOOP` |
 | Input prompt-size guard | Rejects before Ollama/request creation and preserves the target |
 | Second verification failure | Reports `FAIL` and makes no third request |
-| Transactional rollback | Restores existing bytes/mode and removes failed new files; reports `Restored` |
+| Transactional rollback | Restores existing bytes/mode, restores modified tracked outside files, removes new untracked outside files, preserves earlier accepted batch children, and reports `Restored` |
 | Truncated model response | Rejects `done_reason=length` without overwriting target |
 | New-file target | Creates a file when its existing parent is inside the repo |
 | Ordered batch | Runs 12 ordered fixtures (and supports 100+), reports counts, and stops after first failure without later requests |
@@ -34,6 +34,8 @@ It must cover:
 | Traversal target | Rejects before Ollama is contacted |
 | Positive limits/proxy | Rejects zero values; asserts loopback `--noproxy` and remote proxy preservation |
 | Non-Git/dirty worktree | Rejects before Ollama is contacted |
+| Pre-branch validation | Dirty `main` and malformed contracts fail without creating `delegate/contract-*` |
+| Consumer audit log | Two sequential contracts in a repo without a `.claude/` ignore leave only accepted target changes; the log remains available |
 
 ## Regression checks
 
@@ -47,6 +49,14 @@ git diff --stat
 The v1 benchmark result remains a frozen artifact. Do not run the full benchmark
 against the current router without creating a new, separately named dataset and
 obtaining maintainer approval *(confirm process)*.
+
+Deterministic benchmark checks also include:
+
+```bash
+bash benchmark/test_run_local_contract.sh
+python3 benchmark/test_report.py
+python3 benchmark/report.py benchmark/raw_data.jsonl benchmark/full_tasks.json
+```
 
 ## Manual checks
 

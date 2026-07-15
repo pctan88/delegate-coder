@@ -31,7 +31,9 @@ being misread by the single-contract fallback parser.
 | `test_command` | yes | Shell command run from the repository root after generation |
 
 Malformed JSON may use the deliberately limited field-extraction fallback. A
-valid JSON object is the supported protocol and should be preferred.
+valid JSON object is the supported protocol and should be preferred. Shape,
+Git-worktree, cleanliness, path, timeout-runner, and context-budget checks are
+performed before the dispatcher creates an isolation branch whenever possible.
 
 ## Ollama request
 
@@ -74,7 +76,11 @@ Exit status is zero for `PASS` and `NOOP`, non-zero for `FAIL` or setup/
 generation errors. A batch report is `PASS` when every child is `PASS` or
 `NOOP`, otherwise `FAIL`; it reports completed, failed, and skipped counts and
 its retry count is the sum of child retries. The diff compares the pre-contract
-snapshot to the accepted candidate; outside-target changes fail.
+target snapshot to the accepted candidate, not to `HEAD`; outside-target changes
+fail. On an unsuccessful child, the target's original existence/bytes/mode and
+the child's full eligible worktree snapshot are restored. New outside-target
+untracked files are removed. A successful earlier child in a batch is included
+in the next child's baseline and is preserved when a later child fails.
 
 ## Environment defaults
 
@@ -102,4 +108,5 @@ there and that endpoint's privacy policy applies.
 `delegate.sh` appends valid JSON start/end events containing agent, model, mode,
 duration, exit code, status, retries, restoration state, branch, errors, and
 all six Ollama metrics. This is local operational telemetry, not a durable task
-database.
+database. Contract setup ensures `.claude/delegate-coder.log` is ignored via
+`.git/info/exclude`; it does not edit a tracked consumer ignore file.

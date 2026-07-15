@@ -77,18 +77,64 @@ PY
   fi
 }
 
+validate_contract_entry() {
+  local contract="$1" first_nonspace
+  first_nonspace="$(printf '%s' "$contract" | sed -n '/[^[:space:]]/s/^[[:space:]]*\(.\).*/\1/p' | head -n1)"
+  if command -v python3 >/dev/null 2>&1; then
+    if CONTRACT_INPUT="$contract" python3 - <<'PY' 2>/dev/null
+import json
+import os
+value = json.loads(os.environ["CONTRACT_INPUT"])
+items = value if isinstance(value, list) else [value]
+if not items:
+    raise ValueError("contract batch must be non-empty")
+for item in items:
+    if not isinstance(item, dict):
+        raise ValueError("contract must be an object")
+    for key in ("target_file", "instructions", "test_command"):
+        if not isinstance(item.get(key), str):
+            raise ValueError(f"{key} must be a string")
+PY
+    then
+      return 0
+    fi
+  elif [[ "$first_nonspace" == "[" ]]; then
+    echo "contract mode requires python3 for contract batches" >&2
+    return 1
+  fi
+  [[ "$first_nonspace" != "[" ]] || { echo "invalid contract batch" >&2; return 1; }
+  local key
+  for key in target_file instructions test_command; do
+    printf '%s' "$contract" | sed -nE "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\1/p" | head -n1 | grep -q . || {
+      echo "invalid contract: expected target_file, instructions, and test_command strings" >&2
+      return 1
+    }
+  done
+}
+
+ensure_runtime_log_ignored() {
+  local root="$1" exclude
+  exclude="$(git -C "$root" rev-parse --git-path info/exclude)" || return 1
+  mkdir -p "$(dirname "$exclude")" || return 1
+  touch "$exclude" || return 1
+  grep -Fxq '/.claude/' "$exclude" 2>/dev/null || {
+    printf '\n# delegate-coder runtime log (local metadata)\n/.claude/\n' >> "$exclude"
+  }
+}
+
 prepare_contract_entry() {
   local root branch dirty
   root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "contract mode requires a Git worktree" >&2; return 1; }
   [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] || { echo "contract mode requires a Git worktree" >&2; return 1; }
   branch="$(git branch --show-current 2>/dev/null)"
   [[ -n "$branch" ]] || { echo "contract mode requires a named feature/delegate branch" >&2; return 1; }
+  ensure_runtime_log_ignored "$root" || { echo "could not configure the local runtime-log exclusion" >&2; return 1; }
+  dirty="$(git status --porcelain --untracked-files=all)"
+  [[ -z "$dirty" ]] || { echo "contract mode requires a clean worktree before the first write" >&2; return 1; }
   if [[ "$branch" == main || "$branch" == master || "$branch" == develop || "$branch" == trunk ]]; then
     branch="${DELEGATE_CONTRACT_BRANCH:-delegate/contract-$(date +%Y%m%d-%H%M%S)-$$}"
     git switch -c "$branch" >/dev/null 2>&1 || { echo "could not create isolated contract branch: $branch" >&2; return 1; }
   fi
-  dirty="$(git status --porcelain --untracked-files=all)"
-  [[ -z "$dirty" ]] || { echo "contract mode requires a clean worktree before the first write" >&2; return 1; }
   CONTRACT_BRANCH="$branch"
 }
 
@@ -99,6 +145,12 @@ report_value() {
 # Contract mode is intentionally independent of the configured chat worker.
 # It reads stdin when the JSON argument is omitted.
 if [[ "$MODE" == "contract" ]]; then
+  if [[ $# -ge 2 ]]; then
+    TASK="$2"
+  else
+    TASK="$(cat)" || exit 1
+  fi
+  validate_contract_entry "$TASK" || exit 1
   prepare_contract_entry || exit 1
   CONTRACT_LOGFILE=".claude/delegate-coder.log"
   CONTRACT_MODEL="${DELEGATE_MODEL:-$(config_get contract.model)}"
@@ -116,11 +168,7 @@ if [[ "$MODE" == "contract" ]]; then
   append_json_event "$CONTRACT_LOGFILE" local-ollama "$CONTRACT_MODEL" contract start branch "$CONTRACT_BRANCH"
   CONTRACT_REPORT="$(mktemp "${TMPDIR:-/tmp}/delegate-coder-report.XXXXXX")" || exit 1
   export DELEGATE_MODEL="$CONTRACT_MODEL" DELEGATE_NUM_CTX="$CONTRACT_NUM_CTX" DELEGATE_KEEP_ALIVE="$CONTRACT_KEEP_ALIVE" DELEGATE_CURL_TIMEOUT="$CONTRACT_CURL_TIMEOUT" DELEGATE_TEST_TIMEOUT="$CONTRACT_TEST_TIMEOUT" DELEGATE_CONTRACT_PREPARED=1 DELEGATE_CONTRACT_BRANCH="$CONTRACT_BRANCH"
-  if [[ $# -ge 2 ]]; then
-    "$SCRIPT_DIR/contract-router.sh" "$TASK" > "$CONTRACT_REPORT"
-  else
-    "$SCRIPT_DIR/contract-router.sh" > "$CONTRACT_REPORT"
-  fi
+  "$SCRIPT_DIR/contract-router.sh" "$TASK" > "$CONTRACT_REPORT"
   CONTRACT_EXIT=$?
   cat "$CONTRACT_REPORT"
   CONTRACT_STATUS="$(report_value Status "$CONTRACT_REPORT")"

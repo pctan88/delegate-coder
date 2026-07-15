@@ -37,7 +37,7 @@ Both conditions use `claude -p "<task>" --output-format json`, which reports tok
 
 ## Task categories (include all four for a credible claim)
 
-- **bulk-read:** "Summarize the architecture of src/, list all modules and their dependencies" — expect the LARGEST savings (worker reads, Claude gets summary)
+- **bulk-read:** "Summarize the architecture of src/, list all modules and their dependencies" — measure this separately; the frozen v1 evidence shows a loss for delegated bulk reads.
 - **implement:** "Add input validation to X with tests" — expect moderate savings
 - **refactor:** "Rename concept X to Y across the codebase" — expect moderate savings
 - **review:** "Review the diff between main and branch B, list issues" — expect large savings
@@ -77,11 +77,20 @@ python3 benchmark/local_contract_report.py benchmark/local-results-YYYYMMDD-HHMM
 python3 benchmark/test_local_contract_report.py
 ```
 
-The reporter accepts arbitrary named conditions, including `C`, and deterministic fixtures are tested without a live model. Use a fresh `OUT_DIR`; the runner refuses to overwrite an existing output file and writes only there. The existing `report.py` remains the reporter for the 48-run Claude A/B aggregate.
+The reporter accepts arbitrary named conditions, including `C`, and deterministic fixtures are tested without a live model. Use a fresh `OUT_DIR`; the runner refuses to overwrite an existing output file and writes only there. The existing `report.py` remains the reporter for the frozen 48-run Claude A/B aggregate.
+
+To reproduce that aggregate from the frozen JSONL (48 auxiliary/null rows are ignored and the 24 valid A plus 24 valid B task rows are included):
+
+```bash
+python3 benchmark/report.py benchmark/raw_data.jsonl benchmark/full_tasks.json
+python3 benchmark/test_report.py
+```
+
+The one-run files under `benchmark/test_results/` are reporter fixtures only; they do not represent the 48-run dataset.
 
 ## Honest reporting guidance for distribution
 
 - Run at least **3 reps** per task per condition (5 is better) — single runs are noise
-- Report per-category numbers, not just the overall average; savings are NOT uniform (bulk-read may save 70%+, small edits may save little or even cost more due to orchestration overhead)
+- Report per-category numbers, not just the overall average; savings are not uniform. In the frozen v1 evidence, bulk-read cost approximately **20% more** and took approximately **3× longer** when delegated. Do not predict savings for a new worker from this unrelated dataset.
 - Report the cases where the skill LOST too — that credibility is worth more than a cherry-picked headline number
 - State the setup: Claude model used, worker agent + model, repo size, date

@@ -19,7 +19,7 @@ default `read`/`exec` adapters and benchmark policy are recorded there.
 | | |
 |---|---|
 | **Feature** | DELEGATE-CODER-001 — contract-driven local Qwen worker |
-| **Status** | Implemented; transactional/structured-output hardening in progress on the feature branch |
+| **Status** | Implemented; merge-blocking hardening covered by deterministic regression tests |
 | **Repository** | `delegate-coder` — plugin marketplace plus benchmark harness |
 | **Source implementation** | `f88aa20` (initial router), `0c70396` (review nits), `b620adb` (prompt preflight/privacy correction) |
 | **Cross-repo work** | Not applicable; the router and its tests are contained here |
@@ -45,13 +45,25 @@ boundaries, and repository-wide reasoning stay on the normal agent path.
   `qwen3-coder:30b`.
 - The router must reject an estimated oversized prompt before model eviction or
   an HTTP request; output-side `done_reason: length` remains a separate guard.
+- Failed generation, verification, timeout, signal, parser, and outside-target
+  exits restore the full pre-child worktree snapshot (target bytes/mode plus
+  tracked and untracked outside-target files); earlier accepted batch children
+  remain on the isolated branch.
+- Contract setup keeps `.claude/delegate-coder.log` available to `/delegate
+  stats` while ignoring it through `.git/info/exclude`, without a tracked
+  consumer-worktree edit.
 - Contract-router tests must pass, including retry, timeout, truncation,
-  no-op, new-file, transactional rollback, strict structured output, ordered
-  batch stop-on-failure, proxy, positive-limit, non-Git, and path-boundary cases.
+  no-op, new-file, transactional rollback for tracked/untracked outside files,
+  strict structured output, ordered batch stop-on-failure, pre-branch
+  validation, consumer audit-log isolation, proxy, positive-limit, non-Git,
+  and path-boundary cases.
 - The additive local benchmark must use five warm repetitions and never write
   the frozen v1 `benchmark/RESULTS.md` or `benchmark/raw_data.jsonl`.
 - The frozen v1 benchmark must remain unchanged. Any benchmark-impacting
   default-path change requires a separately labeled dataset *(confirm owner and
   process)*.
+- `python3 benchmark/report.py benchmark/raw_data.jsonl benchmark/full_tasks.json`
+  reproduces the frozen aggregate; deterministic reporter and no-live-model
+  runner tests cover the additive benchmark path.
 - Historical decisions in `DECISION_LOG.md` are backfilled from commit history;
   they document intent and require maintainer confirmation where marked.

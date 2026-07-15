@@ -40,6 +40,7 @@ FINAL_STATUS="FAIL"
 RETRY_COUNT=0
 ERROR_MESSAGE=""
 OUTSIDE_CHANGES=""
+BASE_WORKTREE_STATUS=""
 BRANCH_NAME="${DELEGATE_CONTRACT_BRANCH:-}"
 TARGET_FILE=""
 TARGET_PATH=""
@@ -50,11 +51,13 @@ CANDIDATE_FILE="$WORK_DIR/candidate"
 TEST_LOG="$WORK_DIR/test.log"
 DIFF_FILE="$WORK_DIR/diff"
 METRICS_FILE="$WORK_DIR/metrics.json"
+SNAPSHOT_ROOT="$WORK_DIR/worktree-snapshot"
+SNAPSHOT_READY=0
 
 cleanup() {
   local rc=$?
-  if [[ "$STAGED" -eq 1 && "$ACCEPTED" -eq 0 ]]; then
-    restore_target || true
+  if [[ "$SNAPSHOT_READY" -eq 1 && "$ACCEPTED" -eq 0 && "$RESTORED" -eq 0 ]] && worktree_needs_restore; then
+    restore_worktree || true
   fi
   if [[ "$REPORT_EMITTED" -eq 0 ]]; then
     emit_report || true
@@ -99,14 +102,14 @@ prepare_worktree() {
     local current_branch dirty
     current_branch="$(git -C "$ROOT_DIR" branch --show-current 2>/dev/null)"
     [[ -n "$current_branch" ]] || fail "contract mode requires a named feature/delegate branch; detached HEAD is not allowed"
+    dirty="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)"
+    [[ -z "$dirty" ]] || fail "contract mode requires a clean worktree before the first write"
     if [[ "$current_branch" == main || "$current_branch" == master || "$current_branch" == develop || "$current_branch" == trunk ]]; then
       BRANCH_NAME="${DELEGATE_CONTRACT_BRANCH:-delegate/contract-$(date +%Y%m%d-%H%M%S)-$$}"
       git -C "$ROOT_DIR" switch -c "$BRANCH_NAME" >/dev/null 2>&1 || fail "could not create isolated contract branch: $BRANCH_NAME"
     else
       BRANCH_NAME="$current_branch"
     fi
-    dirty="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)"
-    [[ -z "$dirty" ]] || fail "contract mode requires a clean worktree before the first write"
   else
     BRANCH_NAME="${BRANCH_NAME:-$(git -C "$ROOT_DIR" branch --show-current 2>/dev/null)}"
   fi
@@ -147,6 +150,41 @@ read_contract() {
   else
     cat > "$CONTRACT_FILE" || fail "could not read contract from stdin"
   fi
+}
+
+validate_contract_input() {
+  local first_nonspace
+  first_nonspace="$(sed -n '/[^[:space:]]/s/^[[:space:]]*\(.\).*/\1/p' "$CONTRACT_FILE" | head -n1)"
+  if command -v python3 >/dev/null 2>&1; then
+    if python3 - "$CONTRACT_FILE" <<'PY'
+import json
+import pathlib
+import sys
+
+value = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+items = value if isinstance(value, list) else [value]
+if not items:
+    raise ValueError("contract batch must be a non-empty JSON array")
+for index, item in enumerate(items, 1):
+    if not isinstance(item, dict):
+        raise ValueError(f"contract {index} must be an object")
+    for key in ("target_file", "instructions", "test_command"):
+        if not isinstance(item.get(key), str):
+            raise ValueError(f"contract {index}: {key} must be a string")
+PY
+    then
+      return 0
+    fi
+  elif [[ "$first_nonspace" == "[" ]]; then
+    fail "python3 is required for contract batches"
+  fi
+
+  [[ "$first_nonspace" != "[" ]] || fail "invalid contract batch"
+  local key value
+  for key in target_file instructions test_command; do
+    value="$(sed -nE "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\1/p" "$CONTRACT_FILE" | head -n1)"
+    [[ -n "$value" ]] || fail "invalid contract: expected target_file, instructions, and test_command strings"
+  done
 }
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -294,6 +332,159 @@ snapshot_target() {
     ORIGINAL_EXISTS=0
     : > "$ORIGINAL_FILE"
   fi
+}
+
+snapshot_worktree() {
+  mkdir -p "$SNAPSHOT_ROOT/payload" || fail "could not create worktree snapshot"
+  python3 - "$ROOT_DIR" "$SNAPSHOT_ROOT" <<'PY' || fail "could not snapshot the worktree"
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+snapshot = pathlib.Path(sys.argv[2])
+payload = snapshot / "payload"
+raw = subprocess.check_output(
+    ["git", "-C", str(root), "ls-files", "-co", "--exclude-standard", "-z"]
+)
+ignored = subprocess.check_output(
+    ["git", "-C", str(root), "ls-files", "-o", "--ignored", "--exclude-standard", "-z"]
+)
+raw += ignored
+manifest = []
+for index, encoded in enumerate(raw.split(b"\0")):
+    if not encoded:
+        continue
+    relative = os.fsdecode(encoded)
+    if relative == ".claude" or relative.startswith(".claude/"):
+        continue
+    source = root / relative
+    if source.is_symlink():
+        manifest.append({"path": relative, "kind": "symlink", "mode": source.lstat().st_mode & 0o7777, "target": os.readlink(source)})
+    elif source.is_file():
+        stored = payload / str(index)
+        shutil.copyfile(source, stored)
+        manifest.append({"path": relative, "kind": "file", "mode": source.stat().st_mode & 0o7777, "stored": stored.name})
+(snapshot / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+PY
+  SNAPSHOT_READY=1
+  BASE_WORKTREE_STATUS="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)"
+}
+
+worktree_needs_restore() {
+  [[ "$STAGED" -eq 1 ]] && return 0
+  python3 - "$ROOT_DIR" "$SNAPSHOT_ROOT" <<'PY'
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+snapshot = pathlib.Path(sys.argv[2])
+manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
+
+def paths():
+    normal = subprocess.check_output(["git", "-C", str(root), "ls-files", "-co", "--exclude-standard", "-z"])
+    ignored = subprocess.check_output(["git", "-C", str(root), "ls-files", "-o", "--ignored", "--exclude-standard", "-z"])
+    result = []
+    for encoded in normal.split(b"\0") + ignored.split(b"\0"):
+        if not encoded:
+            continue
+        relative = os.fsdecode(encoded)
+        if relative == ".claude" or relative.startswith(".claude/"):
+            continue
+        if relative not in result:
+            result.append(relative)
+    return result
+
+expected = {item["path"] for item in manifest}
+current = set(paths())
+if current != expected:
+    if os.environ.get("DELEGATE_DEBUG") == "1":
+        print("contract-router snapshot path mismatch", sorted(expected - current), sorted(current - expected), file=sys.stderr)
+    raise SystemExit(0)
+def mismatch(message):
+    if os.environ.get("DELEGATE_DEBUG") == "1":
+        print(message, file=sys.stderr)
+    raise SystemExit(0)
+for item in manifest:
+    path = root / item["path"]
+    if item["kind"] == "symlink":
+        if not path.is_symlink() or os.readlink(path) != item["target"] or path.lstat().st_mode & 0o7777 != item["mode"]:
+            mismatch(f"contract-router snapshot mismatch: {item['path']}")
+    elif path.read_bytes() != (snapshot / "payload" / item["stored"]).read_bytes() or path.stat().st_mode & 0o7777 != item["mode"]:
+        mismatch(f"contract-router snapshot mismatch: {item['path']}")
+raise SystemExit(1)
+PY
+}
+
+restore_worktree() {
+  [[ "$SNAPSHOT_READY" -eq 1 && "$RESTORED" -eq 0 ]] || return 0
+  if [[ "$STAGED" -eq 1 ]]; then
+    restore_target || return 1
+    RESTORED=0
+  fi
+  python3 - "$ROOT_DIR" "$SNAPSHOT_ROOT" <<'PY' || return 1
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+import tempfile
+
+root = pathlib.Path(sys.argv[1]).resolve()
+snapshot = pathlib.Path(sys.argv[2])
+manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
+baseline = {item["path"] for item in manifest}
+current = subprocess.check_output(
+    ["git", "-C", str(root), "ls-files", "-o", "--exclude-standard", "-z"]
+)
+ignored = subprocess.check_output(
+    ["git", "-C", str(root), "ls-files", "-o", "--ignored", "--exclude-standard", "-z"]
+)
+current += ignored
+for encoded in current.split(b"\0"):
+    if not encoded:
+        continue
+    relative = os.fsdecode(encoded)
+    if relative == ".claude" or relative.startswith(".claude/"):
+        continue
+    if relative in baseline:
+        continue
+    path = root / relative
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif path.exists() or path.is_symlink():
+        path.unlink()
+
+def remove_existing(path):
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif path.exists() or path.is_symlink():
+        path.unlink()
+
+for item in manifest:
+    path = root / item["path"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    remove_existing(path)
+    if item["kind"] == "symlink":
+        path.symlink_to(item["target"])
+        continue
+    stored = snapshot / "payload" / item["stored"]
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".delegate-coder-restore-", delete=False) as handle:
+        temporary = pathlib.Path(handle.name)
+        with stored.open("rb") as source:
+            shutil.copyfileobj(source, handle)
+    os.chmod(temporary, item["mode"])
+    os.replace(temporary, path)
+PY
+  STAGED=0
+  RESTORED=1
 }
 
 build_request() {
@@ -477,13 +668,13 @@ emit_report() {
   if [[ "$FINAL_STATUS" == PASS ]]; then
     if cmp -s "$ORIGINAL_FILE" "$CANDIDATE_FILE"; then
       FINAL_STATUS=NOOP
-      restore_target || ERROR_MESSAGE="could not restore unchanged candidate"
+      restore_worktree || ERROR_MESSAGE="could not restore unchanged candidate"
     else
       ACCEPTED=1
       STAGED=0
     fi
-  elif [[ "$STAGED" -eq 1 ]]; then
-    restore_target || ERROR_MESSAGE="could not restore target after failure"
+  elif [[ "$SNAPSHOT_READY" -eq 1 ]] && worktree_needs_restore; then
+    restore_worktree || ERROR_MESSAGE="could not restore worktree after failure"
   fi
   build_candidate_diff
   printf '# Contract Result\n\n'
@@ -516,7 +707,7 @@ PY
 }
 
 read_contract "$@"
-prepare_worktree
+validate_contract_input
 require_bounded_runner
 mkdir -p "$WORK_DIR/parsed"
 run_batch_if_present
@@ -529,6 +720,8 @@ if ! parse_contract_json 2>/dev/null; then
   parse_contract_regex || fail "invalid contract: expected target_file, instructions, and test_command strings"
 fi
 snapshot_target
+prepare_worktree
+snapshot_worktree
 prepare_gpu
 
 REQUEST_FILE="$WORK_DIR/request.json"
