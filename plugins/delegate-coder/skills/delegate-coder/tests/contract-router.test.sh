@@ -837,4 +837,117 @@ CURL_MODE=syntax_error run_dispatch "$context_json" || fail "syntax_error correc
 contains "$ARTIFACT_DIR/request.2" 'target.py' "retry request should include python compiler/syntax error"
 pass "fail-fast syntax preflight check"
 
+# Phase 2: shell-metacharacter filenames syntax check (no eval command injection)
+setup_case shell_meta_file
+meta_name='$(echo meta)_"quote"_`backtick`_space .py'
+printf 'print("meta")\n' > "$CASE_DIR/$meta_name"
+git -C "$CASE_DIR" add "$meta_name"
+git -C "$CASE_DIR" commit -qm add-meta
+context_json="{\"target_file\": \"\$(echo meta)_\\\"quote\\\"_\`backtick\`_space .py\", \"instructions\": \"update target\", \"test_command\": \"true\"}"
+run_dispatch "$context_json" || fail "metacharacter filename contract should run"
+pass "shell-metacharacter filename handling"
+
+# Phase 2: secret context files rejection (no model contact assertion)
+setup_case secret_context
+printf 'secret-key\n' > "$CASE_DIR/.npmrc"
+mkdir -p "$CASE_DIR/.aws"
+printf 'aws-cred\n' > "$CASE_DIR/.aws/config"
+git -C "$CASE_DIR" add .npmrc .aws/config
+git -C "$CASE_DIR" commit -qm add-secrets
+
+for secret_file in ".npmrc" ".aws/config"; do
+  context_json="{\"target_file\": \"target.txt\", \"instructions\": \"update\", \"test_command\": \"true\", \"context_files\": [\"$secret_file\"]}"
+  set +e
+  run_dispatch "$context_json"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "$secret_file context should be rejected"
+  contains "$STDERR_PATH" 'sensitive' "expected sensitive/secret error for $secret_file"
+  # Assert NO model contact: curl count is 0 or doesn't exist
+  [[ ! -f "$CURL_COUNT_FILE_PATH" ]] || [[ "$(cat "$CURL_COUNT_FILE_PATH")" -eq 0 ]] || fail "Ollama was contacted for secret context $secret_file"
+done
+pass "secret context path rejection with no model contact"
+
+# Phase 2: symlinked context parent folder rejection (no model contact assertion)
+setup_case symlink_parent
+mkdir -p "$CASE_DIR/real"
+printf 'content\n' > "$CASE_DIR/real/ref.txt"
+ln -s real "$CASE_DIR/link_dir"
+git -C "$CASE_DIR" add real link_dir
+git -C "$CASE_DIR" commit -qm add-symlink-dir
+context_json='{"target_file": "target.txt", "instructions": "update", "test_command": "true", "context_files": ["link_dir/ref.txt"]}'
+set +e
+run_dispatch "$context_json"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "symlinked parent context should be rejected"
+contains "$STDERR_PATH" 'contains a symlink' "expected symlink folder error"
+[[ ! -f "$CURL_COUNT_FILE_PATH" ]] || [[ "$(cat "$CURL_COUNT_FILE_PATH")" -eq 0 ]] || fail "Ollama was contacted for symlinked parent context"
+pass "symlinked parent folder rejection"
+
+# Phase 2: oversized context file size cap (no model contact assertion)
+setup_case oversized_context
+dd if=/dev/zero of="$CASE_DIR/large.txt" bs=1024 count=66 2>/dev/null
+git -C "$CASE_DIR" add large.txt
+git -C "$CASE_DIR" commit -qm add-large
+context_json='{"target_file": "target.txt", "instructions": "update", "test_command": "true", "context_files": ["large.txt"]}'
+set +e
+run_dispatch "$context_json"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "oversized context file should be rejected"
+contains "$STDERR_PATH" 'size exceeds 64KB' "expected oversized context file error"
+[[ ! -f "$CURL_COUNT_FILE_PATH" ]] || [[ "$(cat "$CURL_COUNT_FILE_PATH")" -eq 0 ]] || fail "Ollama was contacted for oversized context file"
+pass "oversized context file rejection"
+
+# Phase 2: nested markdown fences in context
+setup_case nested_fences
+printf 'nested ``` code ``` here\n' > "$CASE_DIR/ref.txt"
+git -C "$CASE_DIR" add ref.txt
+git -C "$CASE_DIR" commit -qm add-ref
+context_json='{"target_file": "target.txt", "instructions": "update", "test_command": "true", "context_files": ["ref.txt"]}'
+run_dispatch "$context_json" || fail "nested fences contract should run"
+contains "$ARTIFACT_DIR/request.1" '````' "expected 4 backticks fence in prompt for nested fences"
+pass "nested markdown fences in context"
+
+# Phase 2: virtualenv python detection and safe quoting
+setup_case venv_detect
+mkdir -p "$CASE_DIR/.venv/bin"
+cat > "$CASE_DIR/.venv/bin/python" <<SH
+#!/usr/bin/env bash
+if [[ "\$*" == *"-c import pytest"* ]]; then
+  exit 1
+fi
+SH
+chmod +x "$CASE_DIR/.venv/bin/python"
+mkdir -p "$CASE_DIR/tests"
+detected_cmd="$(bash "$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/detect-test.sh" "$CASE_DIR")"
+[[ "$detected_cmd" == *".venv/bin/python -m unittest discover"* ]] || fail "expected .venv python unittest fallback, got: $detected_cmd"
+pass "virtualenv python detection and fallback"
+
+# Phase 2: Configurable output budget floor and validation
+setup_case budget_floor
+context_json='{"target_file": "target.txt", "instructions": "update", "test_command": "true"}'
+
+# 1. Configured budget below 4096 should be rejected
+set +e
+DELEGATE_MIN_OUTPUT_BUDGET=1024 run_dispatch "$context_json"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "min output budget < 4096 should be rejected"
+contains "$STDERR_PATH" 'must be >= 4096' "expected budget floor error"
+
+# 2. Configured budget as non-integer should be rejected
+set +e
+DELEGATE_MIN_OUTPUT_BUDGET=abc run_dispatch "$context_json"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "invalid budget should be rejected"
+contains "$STDERR_PATH" 'must be a strictly positive integer' "expected budget positive integer error"
+
+# 3. Configured budget >= 4096 should succeed and be applied
+DELEGATE_MIN_OUTPUT_BUDGET=8192 run_dispatch "$context_json" || fail "min budget of 8192 should succeed"
+contains "$ARTIFACT_DIR/request.1" '"num_predict": 8192' "expected custom budget of 8192 in request"
+pass "configurable output budget validation"
+
 echo "All contract-router tests passed."

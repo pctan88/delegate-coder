@@ -23,13 +23,26 @@ fi
 if [[ -f pytest.ini ]] \
    || { [[ -f pyproject.toml ]] && grep -q pytest pyproject.toml 2>/dev/null; } \
    || [[ -d tests ]]; then
-  # Phase 1: Smart Test Verification
-  if command -v pytest >/dev/null 2>&1; then
-    echo "python3 -m pytest -q"
-  else
-    echo "python3 -m unittest discover"
+  py_interpreter=""
+  if [[ -x ".venv/bin/python" ]]; then
+    py_interpreter=".venv/bin/python"
+  elif [[ -x "venv/bin/python" ]]; then
+    py_interpreter="venv/bin/python"
+  elif command -v python >/dev/null 2>&1; then
+    py_interpreter="python"
+  elif command -v python3 >/dev/null 2>&1; then
+    py_interpreter="python3"
   fi
-  exit 0
+
+  if [[ -n "$py_interpreter" ]]; then
+    quoted_py="$(printf '%q' "$py_interpreter")"
+    if "$py_interpreter" -c "import pytest" >/dev/null 2>&1; then
+      echo "$quoted_py -m pytest -q"
+    else
+      echo "$quoted_py -m unittest discover"
+    fi
+    exit 0
+  fi
 fi
 
 # 3. Go

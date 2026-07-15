@@ -41,10 +41,10 @@ making these cases diagnosable.
 
 ## Acceptance criteria
 
-- A new target receives at least the configured minimum output budget and is
+- A new target receives at least the configured minimum output budget (with a safety floor of 4096 tokens) and is
   rejected before Ollama if prompt plus output exceeds `num_ctx`.
-- `context_files` are repository-relative regular files, are bounded by size,
-  and reject secret-like paths before branch creation or model contact.
+- `context_files` are repository-relative regular files, are bounded by size (64KB per file, 256KB total),
+  and reject secret-like paths (such as `.env*`, `.npmrc`, `.netrc`, `.git-credentials`, `.aws/`, `.ssh/`, `.kube/`, `.docker/`, credentials, keys, etc.) before branch creation or model contact.
 - The prompt labels context as untrusted read-only reference material and
   preserves arbitrary source text without relying on executable interpolation.
 - Test detection chooses an actually available interpreter/runner and reports

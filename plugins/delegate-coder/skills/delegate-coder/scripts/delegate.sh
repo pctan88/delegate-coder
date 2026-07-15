@@ -183,19 +183,57 @@ for index, item in enumerate(items, 1):
         context_files = []
     if not isinstance(context_files, list):
         raise ValueError(f"contract {index}: context_files must be a JSON array")
+
+    total_context_size = 0
     for cf in context_files:
         if not isinstance(cf, str) or not cf:
             raise ValueError(f"contract {index}: context_files items must be non-empty strings")
         cf_pure = PurePosixPath(cf)
         if cf_pure.is_absolute() or cf.startswith("~/") or ".." in cf_pure.parts:
             raise ValueError(f"context file resolves outside the repository: {cf}")
+
+        # Check directories for blocked sensitive ones
+        for part in cf_pure.parts:
+            if part in [".aws", ".ssh", ".kube", ".docker"]:
+                raise ValueError(f"context file path contains a blocked sensitive directory: {cf}")
+
+        # Check for secret-like filenames
+        cf_name = cf_pure.name.lower()
+        secret_keywords = ["credential", "private_key", "secret", "password", "passwd", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"]
+        secret_extensions = [".pem", ".key", ".pkcs12", ".pfx", ".p12", ".gpg", ".pgp", ".vault"]
+        if cf_name.startswith(".env") or \
+           cf_name in [".npmrc", ".netrc", ".git-credentials"] or \
+           any(kw in cf_name for kw in secret_keywords) or \
+           any(cf_name.endswith(ext) for ext in secret_extensions):
+            raise ValueError(f"context file contains sensitive/secret data: {cf}")
+
         cf_path = root / pathlib.Path(cf)
         if not cf_path.exists():
             raise ValueError(f"context file does not exist: {cf}")
-        if cf_path.is_symlink():
-            raise ValueError(f"context file must not be a symlink: {cf}")
+
+        # Ensure the resolved path remains inside the repository
+        root_real = root.resolve()
+        cf_path_real = cf_path.resolve(strict=True)
+        if root_real not in cf_path_real.parents and cf_path_real != root_real:
+            raise ValueError(f"context file resolves outside the repository: {cf}")
+
+        # Check if any component in the path (from root to target) is a symlink
+        current = root
+        for part in pathlib.Path(cf).parts:
+            current = current / part
+            if current.is_symlink():
+                raise ValueError(f"context file path contains a symlink: {cf}")
+
         if not cf_path.is_file():
             raise ValueError(f"context file must be a regular file: {cf}")
+
+        # Check size caps
+        file_size = cf_path.stat().st_size
+        if file_size > 65536:
+            raise ValueError(f"context file size exceeds 64KB: {cf}")
+        total_context_size += file_size
+        if total_context_size > 262144:
+            raise ValueError(f"total context files size exceeds 256KB")
 PY
 }
 
@@ -210,13 +248,16 @@ resolve_contract_settings() {
   CONTRACT_CURL_TIMEOUT="${CONTRACT_CURL_TIMEOUT:-600}"
   CONTRACT_TEST_TIMEOUT="${DELEGATE_TEST_TIMEOUT:-$(config_get contract.test_timeout)}"
   CONTRACT_TEST_TIMEOUT="${CONTRACT_TEST_TIMEOUT:-300}"
+  CONTRACT_MIN_OUTPUT_BUDGET="${DELEGATE_MIN_OUTPUT_BUDGET:-$(config_get contract.min_output_budget)}"
+  CONTRACT_MIN_OUTPUT_BUDGET="${CONTRACT_MIN_OUTPUT_BUDGET:-4096}"
   local setting_name setting_value
-  for setting_name in CONTRACT_NUM_CTX CONTRACT_CURL_TIMEOUT CONTRACT_TEST_TIMEOUT; do
+  for setting_name in CONTRACT_NUM_CTX CONTRACT_CURL_TIMEOUT CONTRACT_TEST_TIMEOUT CONTRACT_MIN_OUTPUT_BUDGET; do
     setting_value="${!setting_name}"
     case "$setting_value" in
       ''|*[!0-9]*|0) echo "contract mode: $setting_name must be a strictly positive integer" >&2; return 1 ;;
     esac
   done
+  [[ "$CONTRACT_MIN_OUTPUT_BUDGET" -ge 4096 ]] || { echo "contract mode: CONTRACT_MIN_OUTPUT_BUDGET must be >= 4096" >&2; return 1; }
 }
 
 ensure_runtime_log_ignored() {
@@ -300,7 +341,7 @@ if [[ "$MODE" == "contract" ]]; then
   export DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
   append_json_event "$CONTRACT_LOGFILE" local-ollama "$CONTRACT_MODEL" contract start branch "$CONTRACT_BRANCH"
   CONTRACT_REPORT="$(mktemp "${TMPDIR:-/tmp}/delegate-coder-report.XXXXXX")" || exit 1
-  export DELEGATE_MODEL="$CONTRACT_MODEL" DELEGATE_NUM_CTX="$CONTRACT_NUM_CTX" DELEGATE_KEEP_ALIVE="$CONTRACT_KEEP_ALIVE" DELEGATE_CURL_TIMEOUT="$CONTRACT_CURL_TIMEOUT" DELEGATE_TEST_TIMEOUT="$CONTRACT_TEST_TIMEOUT"
+  export DELEGATE_MODEL="$CONTRACT_MODEL" DELEGATE_NUM_CTX="$CONTRACT_NUM_CTX" DELEGATE_KEEP_ALIVE="$CONTRACT_KEEP_ALIVE" DELEGATE_CURL_TIMEOUT="$CONTRACT_CURL_TIMEOUT" DELEGATE_TEST_TIMEOUT="$CONTRACT_TEST_TIMEOUT" DELEGATE_MIN_OUTPUT_BUDGET="$CONTRACT_MIN_OUTPUT_BUDGET"
   # Phase 1: Robust Script Execution (prevent chmod +x loss)
   bash "$SCRIPT_DIR/contract-router.sh" "$TASK" > "$CONTRACT_REPORT"
   CONTRACT_EXIT=$?

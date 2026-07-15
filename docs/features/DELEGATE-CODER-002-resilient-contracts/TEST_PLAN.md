@@ -2,28 +2,28 @@
 
 ## Existing evidence from PR #6
 
-- `plugins/delegate-coder/skills/delegate-coder/tests/core.test.sh` — 22 checks
-  pass.
-- `plugins/delegate-coder/skills/delegate-coder/tests/contract-router.test.sh`
-  — all existing and PR #6 checks pass.
-- `plugins/delegate-coder/tests/codex-package.test.sh` — package validation
-  passes.
+- `plugins/delegate-coder/skills/delegate-coder/tests/core.test.sh` — 22 checks pass.
+- `plugins/delegate-coder/skills/delegate-coder/tests/contract-router.test.sh` — all existing and new checks pass.
+- `plugins/delegate-coder/tests/codex-package.test.sh` — package validation passes.
 
-## Required regression cases
+## Implemented verification cases
 
-| Area | Case | Expected result |
-|---|---|---|
-| Output | Empty/new target | Minimum budget is applied; no silent truncation |
-| Output | Prompt plus output exceeds context | Fails before Ollama/eviction |
-| Context | Valid interface file | Included in prompt and counted in budget |
-| Context | `.env`, private key, credentials, secret store | Rejected before model contact |
-| Context | Oversized file | Rejected with a remediation message |
-| Context | Filename/content containing Markdown fences | Prompt remains structurally safe |
-| Preflight | Python, shell, JavaScript, TypeScript syntax failure | Fails before project tests and retries once |
-| Preflight | Filename containing quotes, `$()`, spaces, or backticks | No shell expansion; file remains untouched |
-| Detection | `.venv` with unittest but no pytest | Uses the working project interpreter and unittest |
-| Rollback | Preflight failure | Target, outside files, and index restore |
-| Compatibility | No contract configuration | Existing agent/read/exec behavior unchanged |
+| Area | Case | Expected result | Status |
+|---|---|---|---|
+| Output | Empty/new target | Minimum budget (safety floor 4096) is applied; no silent truncation | Passed |
+| Output | Configurable output budget | Enforces values >= 4096; rejects invalid values early | Passed |
+| Output | Prompt plus output exceeds context | Fails before Ollama/eviction | Passed |
+| Context | Valid interface file | Included in prompt and counted in budget | Passed |
+| Context | Secrets denylist (`.env*`, `.npmrc`, keys, etc.) | Rejected before model contact (no curl requests made) | Passed |
+| Context | Sensitive directories (`.aws/`, `.ssh/`, etc.) | Rejected before model contact (no curl requests made) | Passed |
+| Context | Symlinked parent directories | Rejected before model contact (no curl requests made) | Passed |
+| Context | Oversized file (> 64KB per file, > 256KB total) | Rejected before model contact (no curl requests made) | Passed |
+| Context | Filename/content containing Markdown fences | Prompt remains structurally safe using dynamic fences | Passed |
+| Preflight | Python, shell, JS, TS syntax failure | Fails before project tests and retries once | Passed |
+| Preflight | Filename containing quotes, `$()`, spaces, or backticks | No shell expansion or `eval` execution; files remain untouched | Passed |
+| Detection | Virtualenv python detection & pytest import check | Resolves interpreter (.venv, etc.) and falls back to unittest if pytest absent | Passed |
+| Rollback | Preflight failure | Target, outside files, and index restore | Passed |
+| Compatibility | No contract configuration | Existing agent/read/exec behavior unchanged | Passed |
 
 ## Commands
 

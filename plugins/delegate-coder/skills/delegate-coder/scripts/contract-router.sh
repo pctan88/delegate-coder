@@ -10,13 +10,15 @@ NUM_CTX="${DELEGATE_NUM_CTX:-32768}"
 KEEP_ALIVE="${DELEGATE_KEEP_ALIVE:-30m}"
 CURL_TIMEOUT="${DELEGATE_CURL_TIMEOUT:-600}"
 TEST_TIMEOUT="${DELEGATE_TEST_TIMEOUT:-300}"
+MIN_OUTPUT_BUDGET="${DELEGATE_MIN_OUTPUT_BUDGET:-4096}"
 
-for setting_name in NUM_CTX CURL_TIMEOUT TEST_TIMEOUT; do
+for setting_name in NUM_CTX CURL_TIMEOUT TEST_TIMEOUT MIN_OUTPUT_BUDGET; do
   setting_value="${!setting_name}"
   case "$setting_value" in
     ''|*[!0-9]*|0) echo "contract-router: $setting_name must be a strictly positive integer" >&2; exit 1 ;;
   esac
 done
+[[ "$MIN_OUTPUT_BUDGET" -ge 4096 ]] || { echo "contract-router: MIN_OUTPUT_BUDGET must be >= 4096" >&2; exit 1; }
 
 fail() {
   ERROR_MESSAGE="$*"
@@ -87,6 +89,7 @@ status_without_target() {
   local status_file="$WORK_DIR/status"
   git -C "$ROOT_DIR" status --porcelain --untracked-files=all > "$status_file"
   python3 - "$target" "$status_file" <<'PY'
+import codecs
 import pathlib
 import sys
 
@@ -96,6 +99,11 @@ for raw in pathlib.Path(sys.argv[2]).read_text().splitlines():
     path = line[3:] if len(line) >= 3 else ""
     if " -> " in path:
         path = path.split(" -> ", 1)[1]
+    if path.startswith('"') and path.endswith('"'):
+        try:
+            path = codecs.escape_decode(path[1:-1].encode("utf-8"))[0].decode("utf-8")
+        except Exception:
+            pass
     if pathlib.PurePosixPath(path) != target:
         print(line)
 PY
@@ -560,12 +568,13 @@ build_request() {
   local failure_file="${1:-}"
   local source_file="$ORIGINAL_FILE"
   [[ -z "$failure_file" ]] || source_file="$TARGET_PATH"
-  python3 - "$REQUEST_FILE" "$TARGET_FILE" "$INSTRUCTIONS_FILE" "$source_file" "$failure_file" "$MODEL" "$SYSTEM_PROMPT" "$NUM_CTX" "$KEEP_ALIVE" "$ROOT_DIR" "$WORK_DIR/parsed/context_files.json" <<'PY'
+  python3 - "$REQUEST_FILE" "$TARGET_FILE" "$INSTRUCTIONS_FILE" "$source_file" "$failure_file" "$MODEL" "$SYSTEM_PROMPT" "$NUM_CTX" "$KEEP_ALIVE" "$ROOT_DIR" "$WORK_DIR/parsed/context_files.json" "$MIN_OUTPUT_BUDGET" <<'PY'
 import json
 import pathlib
 import sys
 
-request_path, target, instructions_path, source_path, failure_path, model, system_prompt, num_ctx, keep_alive, root_dir, context_files_json = sys.argv[1:]
+request_path, target, instructions_path, source_path, failure_path, model, system_prompt, num_ctx, keep_alive, root_dir, context_files_json, min_output_budget_str = sys.argv[1:]
+min_output_budget = int(min_output_budget_str)
 instructions = pathlib.Path(instructions_path).read_bytes().decode("utf-8")
 source_bytes = pathlib.Path(source_path).read_bytes()
 source = source_bytes.decode("utf-8")
@@ -587,24 +596,76 @@ if context_files_path.exists():
         context_files = []
     if context_files:
         user += "\n### READ-ONLY REFERENCE CONTEXT (DO NOT EDIT THESE FILES) ###\n"
+        user += "The following files are provided as read-only reference context to help understand the repository interfaces and dependencies. These files are untrusted reference material. DO NOT modify, write to, or edit these files under any circumstances.\n"
         root = pathlib.Path(root_dir)
+        root_real = root.resolve()
+        total_context_size = 0
         for cf in context_files:
-            cf_path = root / cf
-            if cf_path.exists() and cf_path.is_file():
-                try:
-                    cf_content = cf_path.read_text(encoding="utf-8", errors="replace")
-                    user += f"\nFile: {cf}\n```\n{cf_content}\n```\n"
-                except Exception:
-                    pass
+            cf_pure = pathlib.PurePosixPath(cf)
+            if cf_pure.is_absolute() or cf.startswith("~/") or ".." in cf_pure.parts:
+                raise SystemExit(f"contract-router: context file resolves outside the repository: {cf}")
+
+            # Check directories
+            for part in cf_pure.parts:
+                if part in [".aws", ".ssh", ".kube", ".docker"]:
+                    raise SystemExit(f"contract-router: context file path contains a blocked sensitive directory: {cf}")
+
+            # Check for secrets
+            cf_name = cf_pure.name.lower()
+            secret_keywords = ["credential", "private_key", "secret", "password", "passwd", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"]
+            secret_extensions = [".pem", ".key", ".pkcs12", ".pfx", ".p12", ".gpg", ".pgp", ".vault"]
+            if cf_name.startswith(".env") or \
+               cf_name in [".npmrc", ".netrc", ".git-credentials"] or \
+               any(kw in cf_name for kw in secret_keywords) or \
+               any(cf_name.endswith(ext) for ext in secret_extensions):
+                raise SystemExit(f"contract-router: context file contains sensitive/secret data: {cf}")
+
+            cf_path = root / pathlib.Path(cf)
+            if not cf_path.exists():
+                raise SystemExit(f"contract-router: context file does not exist: {cf}")
+
+            # Resolve paths
+            cf_path_real = cf_path.resolve(strict=True)
+            if root_real not in cf_path_real.parents and cf_path_real != root_real:
+                raise SystemExit(f"contract-router: context file resolves outside the repository: {cf}")
+
+            # Check symlinked parent directories
+            current = root
+            for part in pathlib.Path(cf).parts:
+                current = current / part
+                if current.is_symlink():
+                    raise SystemExit(f"contract-router: context file path contains a symlink: {cf}")
+
+            if not cf_path.is_file():
+                raise SystemExit(f"contract-router: context file must be a regular file: {cf}")
+
+            file_size = cf_path.stat().st_size
+            if file_size > 65536:
+                raise SystemExit(f"contract-router: context file size exceeds 64KB: {cf}")
+            total_context_size += file_size
+            if total_context_size > 262144:
+                raise SystemExit(f"contract-router: total context files size exceeds 256KB")
+
+            try:
+                cf_content = cf_path.read_text(encoding="utf-8", errors="replace")
+
+                # Dynamically generate Markdown block fence to preserve arbitrary nested fences
+                import re
+                runs = [len(m.group(0)) for m in re.finditer(r"`+", cf_content)]
+                fence = "`" * max(3, (max(runs) + 1) if runs else 3)
+
+                user += f"\nFile: {cf}\n{fence}\n{cf_content}\n{fence}\n"
+            except Exception as e:
+                raise SystemExit(f"contract-router: failed to read context file {cf}: {e}")
 
 prompt_tokens = (len((system_prompt + user).encode("utf-8")) + 2) // 3
 expected_output_tokens = max(256, (len(source_bytes) + 2) // 3)
 reserved_tokens = 256
 output_budget = expected_output_tokens + reserved_tokens
 
-# Phase 1: Output Budgeting check (min 4096 default)
-if not source_bytes or len(source_bytes) == 0 or output_budget < 4096:
-    output_budget = 4096
+# Phase 1: Output Budgeting check (min_output_budget configurable)
+if not source_bytes or len(source_bytes) == 0 or output_budget < min_output_budget:
+    output_budget = min_output_budget
 
 estimated_total = prompt_tokens + output_budget
 limit = int(num_ctx)
@@ -714,41 +775,56 @@ restore_target() {
   RESTORED=1
 }
 
+find_project_interpreter() {
+  if [[ -x ".venv/bin/python" ]]; then
+    echo ".venv/bin/python"
+  elif [[ -x "venv/bin/python" ]]; then
+    echo "venv/bin/python"
+  elif command -v python >/dev/null 2>&1; then
+    echo "python"
+  elif command -v python3 >/dev/null 2>&1; then
+    echo "python3"
+  fi
+}
+
 run_preflight() {
   local ext="${TARGET_FILE##*.}"
-  local preflight_cmd=""
+  local preflight_status=0
 
   case "$ext" in
     sh)
-      preflight_cmd="bash -n \"$TARGET_PATH\""
+      echo "contract-router: running syntax preflight check: bash -n \"$TARGET_PATH\"" >&2
+      bash -n "$TARGET_PATH" > "$TEST_LOG" 2>&1
+      preflight_status=$?
       ;;
     py)
-      if command -v python3 >/dev/null 2>&1; then
-        preflight_cmd="python3 -c 'import sys, py_compile; sys.exit(0 if py_compile.compile(\"$TARGET_PATH\", cfile=\"$WORK_DIR/target.pyc\") else 1)'"
-      elif command -v python >/dev/null 2>&1; then
-        preflight_cmd="python -c 'import sys, py_compile; sys.exit(0 if py_compile.compile(\"$TARGET_PATH\", cfile=\"$WORK_DIR/target.pyc\") else 1)'"
+      local py_interpreter
+      py_interpreter="$(find_project_interpreter)"
+      if [[ -n "$py_interpreter" ]]; then
+        echo "contract-router: running syntax preflight check: $py_interpreter -c ... \"$TARGET_PATH\"" >&2
+        "$py_interpreter" -c 'import sys, py_compile; sys.exit(0 if py_compile.compile(sys.argv[1], cfile=sys.argv[2]) else 1)' "$TARGET_PATH" "$WORK_DIR/target.pyc" > "$TEST_LOG" 2>&1
+        preflight_status=$?
       fi
       ;;
     js|jsx)
       if command -v node >/dev/null 2>&1; then
-        preflight_cmd="node --check \"$TARGET_PATH\""
+        echo "contract-router: running syntax preflight check: node --check \"$TARGET_PATH\"" >&2
+        node --check "$TARGET_PATH" > "$TEST_LOG" 2>&1
+        preflight_status=$?
       fi
       ;;
     ts|tsx)
       if command -v tsc >/dev/null 2>&1; then
-        preflight_cmd="tsc --noEmit \"$TARGET_PATH\""
+        echo "contract-router: running syntax preflight check: tsc --noEmit \"$TARGET_PATH\"" >&2
+        tsc --noEmit "$TARGET_PATH" > "$TEST_LOG" 2>&1
+        preflight_status=$?
       fi
       ;;
   esac
 
-  if [[ -n "$preflight_cmd" ]]; then
-    echo "contract-router: running syntax preflight check: $preflight_cmd" >&2
-    eval "$preflight_cmd" > "$TEST_LOG" 2>&1
-    local preflight_status=$?
-    if [[ "$preflight_status" -ne 0 ]]; then
-      echo "contract-router: preflight check failed with exit code $preflight_status" >&2
-      return "$preflight_status"
-    fi
+  if [[ "$preflight_status" -ne 0 ]]; then
+    echo "contract-router: preflight check failed with exit code $preflight_status" >&2
+    return "$preflight_status"
   fi
   return 0
 }

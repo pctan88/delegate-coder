@@ -15,17 +15,19 @@ The existing required fields remain:
 
 `context_files` is optional and must be an array of repository-relative regular
 files. The implementation must reject traversal, absolute paths, symlinks,
-directories, secret-like names (`.env*`, credentials, private keys, and local
-secret stores), and files exceeding the configured context-byte limit.
+blocked directory structures (e.g. `.aws/`, `.ssh/`, `.kube/`, `.docker/`),
+symlinked parent directories, secret-like names (`.env*`, `.npmrc`, `.netrc`,
+`.git-credentials`, credentials, private keys, and local secret stores),
+and files exceeding size limits (64KB per file, 256KB total context size).
 
 ## Generation
 
 - Model: configured local Ollama model, normally `qwen3-coder:30b`.
 - Output: strict JSON containing only `updated_file`.
 - Temperature: `0`.
-- Output budget: minimum configured budget for new/small files; otherwise the
+- Output budget: minimum configured budget for new/small files (with a safety floor of 4096 tokens); otherwise the
   target-size estimate plus reserve.
-- The prompt-size guard runs before model eviction, branch creation, and HTTP
+- The prompt-size guard and budget validations run before model eviction, branch creation, and HTTP
   generation where possible.
 
 ## Verification

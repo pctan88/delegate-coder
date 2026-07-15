@@ -33,23 +33,28 @@ one correction, then rollback  restore pre-child index and accept target
 ## Context handling
 
 `context_files` are explicit, repository-relative, read-only references. The
-router must reject absolute paths, traversal, symlinks, directories, secret
-filenames, and files over the configured byte budget before model contact.
+router and dispatcher reject absolute paths, traversal, symlinks, directory
+components, secret/credential-like filenames (e.g. `.env*`, `.npmrc`, keys),
+blocked credential directories (e.g. `.aws/`, `.ssh/`), and symlinked parent
+directories. Files must be within the conservative limit of 64KB per file
+and 256KB total context size.
 Context is included after the task instructions under a clearly labeled
 untrusted-reference section. Its bytes count toward the prompt budget.
 
 ## Output budgeting
 
 The output budget is the larger of the target-size estimate plus reserve and
-the configured minimum for new/small files. The router rejects the request if
-prompt plus output cannot fit inside `num_ctx`; Ollama truncation remains a
-hard failure.
+the configured minimum for new/small files (enforcing a safety floor of 4096 tokens).
+The router validates and rejects the request early if prompt plus output cannot
+fit inside `num_ctx`; Ollama truncation remains a hard failure.
 
 ## Syntax preflight
 
-Preflight uses direct argument vectors for `bash -n`, Python compilation,
+Preflight uses direct argument vectors for `bash -n`, Python compilation
+(invoking the active project interpreter with target compilation to `$WORK_DIR/target.pyc`),
 `node --check`, and `tsc --noEmit`. It must not construct a shell command with
-`eval`, because a repository filename is untrusted input.
+`eval`, because a repository filename is untrusted input. Safe argument passing
+guarantees metacharacters in filenames are handled without shell expansion.
 
 ## Compatibility
 
