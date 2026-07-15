@@ -26,7 +26,8 @@ credit savings it claims.
 The user installs the `tan-tools` marketplace and the `delegate-coder` plugin,
 then runs `/delegate-setup`, which detects installed workers, checks their auth,
 shows an off-machine privacy warning where relevant, lets them pick an agent and
-model, auto-detects the test command, and writes `.claude/delegate-coder.json`.
+model, auto-detects the test command, and writes `.delegate-coder/config.json`
+(Claude's legacy `.claude/delegate-coder.json` remains supported).
 Thereafter the user asks Claude for coding work as normal. With the skill active,
 Claude plans, delegates execution to the worker in `read` or `exec` mode via
 `delegate.sh`, and verifies `exec` results with `git diff` plus the project test
@@ -42,7 +43,8 @@ the delegated code path.
 - Route tasks through `delegate.sh <read|exec>` with built-in adapters for
   `mimo`, `aider`, `codex`, `gemini`, `qwen`, `opencode`, plus a
   `command_override` path for custom agents.
-- Resolve the worker from `DELEGATE_AGENT` or `.claude/delegate-coder.json`, and
+- Resolve the worker from `DELEGATE_AGENT`, `.delegate-coder/config.json`, or
+  the legacy `.claude/delegate-coder.json`, and
   read `model`, `fallback`, `allow_paths`, and `command_override` from config.
 - Detect installed agents and infer the project test command.
 - Request read-only or dry-run behavior for `read` where the worker adapter

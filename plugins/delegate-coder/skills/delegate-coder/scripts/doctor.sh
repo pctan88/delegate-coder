@@ -10,7 +10,11 @@ EXTRA_PATHS="${DELEGATE_PATH_EXTRA:-}"
 COMMON_DIRS="$HOME/.mimocode/bin:$HOME/.local/bin:$HOME/.cargo/bin"
 export PATH="$EXTRA_PATHS:$COMMON_DIRS:$PATH"
 
-CONFIG=".claude/delegate-coder.json"
+CONFIG=".delegate-coder/config.json"
+LEGACY_CONFIG=".claude/delegate-coder.json"
+if [[ ! -f "$CONFIG" && -f "$LEGACY_CONFIG" ]]; then
+  CONFIG="$LEGACY_CONFIG"
+fi
 KNOWN_AGENTS=(mimo aider codex gemini qwen opencode)
 CHECK_ALL=false
 [[ "${1:-}" == "--all" ]] && CHECK_ALL=true

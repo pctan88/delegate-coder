@@ -1,6 +1,6 @@
 {
   "name": "delegate-coder",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Delegate execution-heavy coding work to a cheaper local or CLI worker agent while the orchestrator keeps planning and final review.",
   "author": {
     "name": "Tan",
@@ -28,13 +28,14 @@
     "capabilities": [
       "Read",
       "Write",
-      "Code review"
+      "Code review",
+      "Local Qwen onboarding"
     ],
     "websiteURL": "https://github.com/pctan88/delegate-coder",
     "defaultPrompt": [
+      "Set up Delegate Coder in this Codex project and ask before writing configuration.",
       "Use the delegate worker to summarize this repository.",
-      "Use local Qwen for this bounded implementation task.",
-      "Review the worker diff and run the project's tests."
+      "Use local Qwen for this bounded implementation task and review the worker diff."
     ]
   }
 }

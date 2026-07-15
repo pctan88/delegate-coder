@@ -11,14 +11,15 @@ You are the **orchestrator**. A second CLI coding agent installed on this machin
 
 Check, in order:
 1. `DELEGATE_AGENT` environment variable (e.g. `mimo`, `aider`, `codex`, `gemini`, `opencode`, `qwen`)
-2. `.claude/delegate-coder.json` in the project root (`{"agent": "mimo"}`)
-3. Auto-detect: `bash scripts/detect.sh` lists installed worker agents
+2. `.delegate-coder/config.json` in the project root (`{"agent": "mimo"}`)
+3. `.claude/delegate-coder.json` in the project root (legacy Claude config)
+4. Auto-detect: `bash scripts/detect.sh` lists installed worker agents
 
-If none is configured and one is detected, confirm with the user before first use. If several are detected, ask which to use, then offer to save the choice to `.claude/delegate-coder.json`.
+If none is configured and one is detected, confirm with the user before first use. If several are detected, ask which to use, then offer to save the choice to `.delegate-coder/config.json` (Codex onboarding does this after confirmation). Claude's setup command may continue to write the legacy `.claude/delegate-coder.json` path.
 
 ### Scope guard
 
-Before delegating, check `.claude/delegate-coder.json` for `enabled` and `scope`:
+Before delegating, check the selected config for `enabled` and `scope`:
 - If `enabled` is `false`: do NOT delegate. Do the work yourself.
 - If `scope` is `"read_only"`: only delegate `read` mode tasks. Do `exec` yourself.
 - If `scope` is `"exec_only"`: only delegate `exec` mode tasks. Do `read` yourself.

@@ -12,6 +12,7 @@ bash scripts/delegate.sh <read|exec> "<task spec>"
 - Argument 1 is the mode; only `read` and `exec` are valid.
 - Argument 2 is the full task spec passed to the worker.
 - The worker is resolved from `DELEGATE_AGENT`, else the `agent` field in
+  `.delegate-coder/config.json`, falling back to the legacy
   `.claude/delegate-coder.json`.
 
 ### Exit codes
@@ -28,7 +29,10 @@ bash scripts/delegate.sh <read|exec> "<task spec>"
 
 Progress and warnings go to stderr; worker output goes to stdout.
 
-## Config schema — `.claude/delegate-coder.json`
+## Config schema — `.delegate-coder/config.json`
+
+Existing `.claude/delegate-coder.json` files use the same schema and are read
+only when the neutral config is absent.
 
 Every field is optional; an absent field uses the current default behavior, so
 an empty or missing file reproduces the benchmarked default path.

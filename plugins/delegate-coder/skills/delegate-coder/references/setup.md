@@ -2,7 +2,9 @@
 
 ## Config file
 
-Project-level config lives at `.claude/delegate-coder.json`:
+Project-level config preferably lives at `.delegate-coder/config.json` and is
+shared by Claude Code and Codex. Existing projects using
+`.claude/delegate-coder.json` remain supported as a fallback:
 
 ```json
 {
@@ -34,6 +36,9 @@ Project-level config lives at `.claude/delegate-coder.json`:
 - `contract` — local Ollama settings. All numeric limits must be strictly positive. The router requires a Git worktree, a clean target/worktree, an isolated feature/delegate branch, and a bounded objective test. Contract setup adds only `/.claude/delegate-coder.log` to `.git/info/exclude` and migrates the exact marked delegate-coder legacy stanza if present. An unmarked/user-owned broad `/.claude/` rule is preserved and causes safe preflight failure, so the audit log remains available to `/delegate stats` without hiding tracked or other `.claude/*` changes.
 
 The `DELEGATE_AGENT` environment variable overrides the `agent` field when set.
+Codex's `$delegate-coder-codex-onboarding` skill detects workers and writes the
+neutral path only after confirmation. Claude's `/delegate-setup` command may
+continue to write the legacy path for compatibility.
 
 ## Contract mode
 
@@ -61,6 +66,6 @@ This does **not** apply to a purely local / self-hosted worker (e.g. Ollama cont
 
 1. Detect installed agents: `bash scripts/detect.sh`
 2. Ask the user which to use; show the privacy warning if it sends code off-machine; pick a `model` from [models.md](models.md) (or default/custom)
-3. Ask whether implementation should use the default `agent` backend or opt in to local `contract`; auto-detect the test command (`bash scripts/detect-test.sh`), confirm with the user, and write `.claude/delegate-coder.json` with `agent`, `model`, `test_command`, `implementation_backend`, and (when selected) the `contract` settings.
+3. Ask whether implementation should use the default `agent` backend or opt in to local `contract`; auto-detect the test command (`bash scripts/detect-test.sh`), confirm with the user, and write `.delegate-coder/config.json` with `agent`, `model`, `test_command`, `implementation_backend`, and (when selected) the `contract` settings. Existing Claude setups may retain `.claude/delegate-coder.json`.
 4. Configure the worker's permission rules per the section above
 5. Run a small smoke test: delegate a trivial read task ("summarize the structure of this repo") and confirm output comes back
