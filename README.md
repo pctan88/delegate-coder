@@ -127,6 +127,9 @@ checklist:
   config surface, and benchmark harness.
 - [DELEGATE-CODER-001](docs/features/DELEGATE-CODER-001-contract-router/README.md)
   — the opt-in strict single-file contract router, layered on 000.
+- [DELEGATE-CODER-002](docs/features/DELEGATE-CODER-002-resilient-contracts/README.md)
+  — resilient output budgeting, context handling, test detection, and syntax
+  preflight for contract execution; PR #6 is still in review.
 
 Read the pack matching the code you touch before changing it. Multi-file work is
 decomposed into bounded sequential contracts, and each decision log is the
