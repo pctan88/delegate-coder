@@ -154,6 +154,24 @@ run_dispatch() {
   )
 }
 
+run_dispatch_config_only() {
+  (
+    cd "$CASE_DIR" || exit 1
+    PATH="$CASE_DIR/bin:$PATH" \
+    OLLAMA_PS_FILE="$CASE_DIR/ollama.ps" \
+    OLLAMA_STOP_LOG="$ARTIFACT_DIR/ollama.stops" \
+    CURL_COUNT_FILE="$CURL_COUNT_FILE_PATH" \
+    CURL_REQUEST_PREFIX="$ARTIFACT_DIR/request.config." \
+    CURL_ENV_FILE="$ARTIFACT_DIR/curl.env.config" \
+    CURL_ARGS_FILE="$ARTIFACT_DIR/curl.args.config" \
+    CURL_ORDER_FILE="$ARTIFACT_DIR/curl.order.config" \
+    OLLAMA_HOST=http://127.0.0.1:11434 \
+    CURL_MODE=good \
+    DELEGATE_MODEL=qwen3-coder:30b \
+    bash "$DISPATCH" contract "$1" > "$ARTIFACT_DIR/config.stdout" 2> "$ARTIFACT_DIR/config.stderr"
+  )
+}
+
 run_router_direct() {
   (
     cd "$CASE_DIR" || exit 1
@@ -430,7 +448,7 @@ status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "dirty worktree must fail"
 [[ ! -s "$CURL_COUNT_FILE_PATH" ]] || fail "dirty worktree must not call Ollama"
-contains "$STDERR_PATH" 'clean worktree' "dirty worktree error"
+contains "$STDERR_PATH" 'dirty' "dirty worktree error"
 pass "clean-worktree requirement"
 
 # Dispatcher preflight validates cleanliness before creating a branch.
@@ -458,6 +476,48 @@ set -e
 [[ "$(git -C "$CASE_DIR" branch --show-current)" == main ]] || fail "malformed direct contract must remain on main"
 [[ -z "$(git -C "$CASE_DIR" branch --list 'delegate/contract-*')" ]] || fail "malformed direct contract must not create a delegate branch"
 pass "direct router validates before branch creation"
+
+# Batch target paths are fully validated before the direct router creates a
+# branch, including later children in the array.
+setup_case batch-invalid-main
+git -C "$CASE_DIR" branch -M main
+python3 - "$CASE_DIR/batch.json" <<'PY'
+import json, sys
+json.dump([
+    {"target_file": "target.txt", "instructions": "valid first item", "test_command": "true"},
+    {"target_file": "../outside.txt", "instructions": "invalid later item", "test_command": "true"},
+], open(sys.argv[1], "w"))
+PY
+set +e
+run_router_direct "$(cat "$CASE_DIR/batch.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "invalid batch path must fail"
+[[ "$(git -C "$CASE_DIR" branch --show-current)" == main ]] || fail "invalid batch path must remain on main"
+[[ -z "$(git -C "$CASE_DIR" branch --list 'delegate/contract-*')" ]] || fail "invalid batch path must not create a delegate branch"
+[[ ! -s "$CURL_COUNT_FILE_PATH" ]] || fail "invalid batch path must not contact Ollama"
+contains "$ARTIFACT_DIR/direct.stdout" 'relative path without traversal' "invalid batch path error"
+pass "batch paths validate before branch creation"
+
+# Dispatcher numeric settings from project config are validated before branch
+# creation, even when no environment override is present.
+setup_case config-main
+git -C "$CASE_DIR" branch -M main
+mkdir -p "$CASE_DIR/.claude"
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
+{"contract":{"num_ctx":0}}
+JSON
+make_contract target.txt "true" "$CASE_DIR/contract.json"
+set +e
+run_dispatch_config_only "$(cat "$CASE_DIR/contract.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "zero config context must fail"
+[[ "$(git -C "$CASE_DIR" branch --show-current)" == main ]] || fail "invalid config must remain on main"
+[[ -z "$(git -C "$CASE_DIR" branch --list 'delegate/contract-*')" ]] || fail "invalid config must not create a delegate branch"
+[[ ! -s "$CURL_COUNT_FILE_PATH" ]] || fail "invalid config must not contact Ollama"
+contains "$ARTIFACT_DIR/config.stderr" 'CONTRACT_NUM_CTX must be a strictly positive integer' "invalid config error"
+pass "dispatcher config validates before branch creation"
 
 # A consumer repository without a .claude ignore rule gets an idempotent local
 # exclusion, and sequential contracts leave only accepted target changes.
@@ -545,7 +605,7 @@ status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "traversal target should be rejected"
 [[ ! -s "$CURL_COUNT_FILE_PATH" ]] || fail "rejected target must not call Ollama"
-contains "$STDOUT_PATH" 'relative path without traversal' "traversal error"
+contains "$STDERR_PATH" 'resolves outside the repository' "traversal error"
 pass "path traversal rejection"
 
 # Contract mode is never attempted outside a Git worktree.

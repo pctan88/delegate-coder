@@ -35,6 +35,7 @@ It must cover:
 | Positive limits/proxy | Rejects zero values; asserts loopback `--noproxy` and remote proxy preservation |
 | Non-Git/dirty worktree | Rejects before Ollama is contacted |
 | Pre-branch validation | Dirty `main` and malformed contracts fail without creating `delegate/contract-*` |
+| Batch/config preflight | Invalid later batch paths and zero numeric config limits fail without creating `delegate/contract-*` |
 | Consumer audit log | Two sequential contracts in a repo without a `.claude/` ignore leave only accepted target changes; the log remains available |
 
 ## Regression checks

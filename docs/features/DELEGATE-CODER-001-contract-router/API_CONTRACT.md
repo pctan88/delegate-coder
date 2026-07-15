@@ -32,8 +32,10 @@ being misread by the single-contract fallback parser.
 
 Malformed JSON may use the deliberately limited field-extraction fallback. A
 valid JSON object is the supported protocol and should be preferred. Shape,
-Git-worktree, cleanliness, path, timeout-runner, and context-budget checks are
-performed before the dispatcher creates an isolation branch whenever possible.
+Git-worktree, cleanliness, every batch-child path, timeout-runner, and
+context-budget checks are performed before the dispatcher creates an isolation
+branch whenever possible. Project-configured contract numeric limits are also
+resolved and validated before branch creation.
 
 ## Ollama request
 

@@ -51,7 +51,8 @@ contract JSON
   only after success; all unsuccessful exits restore the target and tracked or
   untracked outside-target mutations. Earlier accepted batch children are part
   of the next child baseline and remain intact.
-- Dispatcher preflight validates contract shape and worktree cleanliness before
+- Dispatcher and direct-router preflight validate contract shape, every batch
+  child path, worktree cleanliness, and configured numeric limits before
   creating an isolation branch. Contract setup adds `/.claude/` to
   `.git/info/exclude`, leaving the runtime audit log available without a
   tracked worktree edit.

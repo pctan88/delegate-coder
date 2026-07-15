@@ -216,8 +216,19 @@ for index, contract in enumerate(value, 1):
 manifest.write_text("".join(path + "\n" for path in paths))
 PY
 
+  # Validate every child target while the worktree is still on its original
+  # branch. Child execution repeats this check against its own baseline.
+  local saved_contract_file="$CONTRACT_FILE"
+  while IFS= read -r batch_contract; do
+    CONTRACT_FILE="$batch_contract"
+    rm -rf "$WORK_DIR/parsed"
+    mkdir -p "$WORK_DIR/parsed"
+    parse_contract_json || fail "invalid contract batch item"
+    snapshot_target
+  done < "$BATCH_MANIFEST"
+  CONTRACT_FILE="$saved_contract_file"
+
   prepare_worktree
-  require_bounded_runner
   prepare_gpu
   BATCH_TOTAL="$(wc -l < "$BATCH_MANIFEST" | tr -d ' ')"
   BATCH_COMPLETED=0

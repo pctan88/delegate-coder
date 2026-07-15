@@ -28,7 +28,8 @@
 - [ ] Confirm malformed output, signals, modified tracked outside files, new
       untracked outside files, and failed new-file contracts restore safely and
       report `Restored`.
-- [ ] Confirm preflight rejects dirty `main` and malformed contracts before any
+- [ ] Confirm preflight rejects dirty `main`, malformed contracts, invalid later
+      batch paths, and zero numeric project settings before any
       `delegate/contract-*` branch is created.
 - [ ] Confirm `.claude/delegate-coder.log` is available to stats while the
       idempotent `.git/info/exclude` rule keeps it out of consumer worktree

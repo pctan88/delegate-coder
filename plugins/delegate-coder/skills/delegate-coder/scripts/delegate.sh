@@ -112,6 +112,83 @@ PY
   done
 }
 
+validate_contract_paths() {
+  local contract="$1" root
+  root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+    echo "contract mode requires a Git worktree" >&2
+    return 1
+  }
+  [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] || {
+    echo "contract mode requires a Git worktree" >&2
+    return 1
+  }
+  CONTRACT_INPUT="$contract" ROOT_INPUT="$root" python3 - <<'PY'
+import json
+import os
+import pathlib
+import subprocess
+from pathlib import PurePosixPath
+
+root = pathlib.Path(os.environ["ROOT_INPUT"]).resolve()
+raw = os.environ["CONTRACT_INPUT"]
+try:
+    value = json.loads(raw)
+    items = value if isinstance(value, list) else [value]
+except json.JSONDecodeError:
+    import re
+    match = re.search(r'"target_file"\s*:\s*"([^\"]*)"', raw)
+    if not match:
+        raise ValueError("invalid contract target_file")
+    items = [{"target_file": match.group(1)}]
+
+for index, item in enumerate(items, 1):
+    target = item.get("target_file")
+    if not isinstance(target, str) or not target:
+        raise ValueError(f"contract {index}: target_file must be a non-empty string")
+    pure = PurePosixPath(target)
+    if pure.is_absolute() or target.startswith("~/") or ".." in pure.parts:
+        raise ValueError(f"target_file resolves outside the repository: {target}")
+    target_path = root / pathlib.Path(target)
+    parent = target_path.parent
+    try:
+        parent_real = parent.resolve(strict=True)
+    except FileNotFoundError:
+        raise ValueError(f"target directory does not exist: {parent.relative_to(root)}")
+    if parent_real != root and root not in parent_real.parents:
+        raise ValueError(f"target_file resolves outside the repository: {target}")
+    if target_path.is_symlink():
+        raise ValueError(f"target_file must not be a symlink: {target}")
+    if target_path.exists() and not target_path.is_file():
+        raise ValueError(f"target_file must be a regular file: {target}")
+    status = subprocess.check_output(
+        ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all", "--", target],
+        text=True,
+    )
+    if status:
+        raise ValueError(f"target_file is dirty; commit or stash it before contract execution: {target}")
+PY
+}
+
+resolve_contract_settings() {
+  CONTRACT_MODEL="${DELEGATE_MODEL:-$(config_get contract.model)}"
+  CONTRACT_MODEL="${CONTRACT_MODEL:-qwen3-coder:30b}"
+  CONTRACT_NUM_CTX="${DELEGATE_NUM_CTX:-$(config_get contract.num_ctx)}"
+  CONTRACT_NUM_CTX="${CONTRACT_NUM_CTX:-32768}"
+  CONTRACT_KEEP_ALIVE="${DELEGATE_KEEP_ALIVE:-$(config_get contract.keep_alive)}"
+  CONTRACT_KEEP_ALIVE="${CONTRACT_KEEP_ALIVE:-30m}"
+  CONTRACT_CURL_TIMEOUT="${DELEGATE_CURL_TIMEOUT:-$(config_get contract.curl_timeout)}"
+  CONTRACT_CURL_TIMEOUT="${CONTRACT_CURL_TIMEOUT:-600}"
+  CONTRACT_TEST_TIMEOUT="${DELEGATE_TEST_TIMEOUT:-$(config_get contract.test_timeout)}"
+  CONTRACT_TEST_TIMEOUT="${CONTRACT_TEST_TIMEOUT:-300}"
+  local setting_name setting_value
+  for setting_name in CONTRACT_NUM_CTX CONTRACT_CURL_TIMEOUT CONTRACT_TEST_TIMEOUT; do
+    setting_value="${!setting_name}"
+    case "$setting_value" in
+      ''|*[!0-9]*|0) echo "contract mode: $setting_name must be a strictly positive integer" >&2; return 1 ;;
+    esac
+  done
+}
+
 ensure_runtime_log_ignored() {
   local root="$1" exclude
   exclude="$(git -C "$root" rev-parse --git-path info/exclude)" || return 1
@@ -151,18 +228,10 @@ if [[ "$MODE" == "contract" ]]; then
     TASK="$(cat)" || exit 1
   fi
   validate_contract_entry "$TASK" || exit 1
+  validate_contract_paths "$TASK" || exit 1
+  resolve_contract_settings || exit 1
   prepare_contract_entry || exit 1
   CONTRACT_LOGFILE=".claude/delegate-coder.log"
-  CONTRACT_MODEL="${DELEGATE_MODEL:-$(config_get contract.model)}"
-  CONTRACT_MODEL="${CONTRACT_MODEL:-qwen3-coder:30b}"
-  CONTRACT_NUM_CTX="${DELEGATE_NUM_CTX:-$(config_get contract.num_ctx)}"
-  CONTRACT_NUM_CTX="${CONTRACT_NUM_CTX:-32768}"
-  CONTRACT_KEEP_ALIVE="${DELEGATE_KEEP_ALIVE:-$(config_get contract.keep_alive)}"
-  CONTRACT_KEEP_ALIVE="${CONTRACT_KEEP_ALIVE:-30m}"
-  CONTRACT_CURL_TIMEOUT="${DELEGATE_CURL_TIMEOUT:-$(config_get contract.curl_timeout)}"
-  CONTRACT_CURL_TIMEOUT="${CONTRACT_CURL_TIMEOUT:-600}"
-  CONTRACT_TEST_TIMEOUT="${DELEGATE_TEST_TIMEOUT:-$(config_get contract.test_timeout)}"
-  CONTRACT_TEST_TIMEOUT="${CONTRACT_TEST_TIMEOUT:-300}"
   CONTRACT_T0="$(date +%s)"
   export DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
   append_json_event "$CONTRACT_LOGFILE" local-ollama "$CONTRACT_MODEL" contract start branch "$CONTRACT_BRANCH"

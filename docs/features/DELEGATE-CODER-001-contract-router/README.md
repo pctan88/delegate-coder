@@ -52,6 +52,8 @@ boundaries, and repository-wide reasoning stay on the normal agent path.
 - Contract setup keeps `.claude/delegate-coder.log` available to `/delegate
   stats` while ignoring it through `.git/info/exclude`, without a tracked
   consumer-worktree edit.
+- Dispatcher and direct-router preflight validate all batch target paths and
+  configured positive numeric limits before creating `delegate/contract-*`.
 - Contract-router tests must pass, including retry, timeout, truncation,
   no-op, new-file, transactional rollback for tracked/untracked outside files,
   strict structured output, ordered batch stop-on-failure, pre-branch
