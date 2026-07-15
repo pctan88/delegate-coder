@@ -1,32 +1,55 @@
 #!/usr/bin/env python3
-"""report.py — aggregate delegate-coder benchmark results into a summary table.
-Usage: python3 report.py results/ [tasks.json]
+"""Aggregate delegate-coder benchmark results into a summary table.
+
+Usage:
+    python3 report.py results/ [tasks.json]
+    python3 report.py raw_data.jsonl [tasks.json]
+
+When a JSONL file is supplied, every valid A/B task row is aggregated; null
+and auxiliary rows are deliberately ignored. Directory input retains the
+historical one-record-per-result-file behavior.
 """
 import json, sys, glob, os
 from collections import defaultdict
 from statistics import mean, stdev
 
-def load(results_dir):
+def decode_records(content):
+    decoder = json.JSONDecoder()
+    records = []
+    index = 0
+    while index < len(content):
+        content = content[index:].lstrip()
+        if not content:
+            break
+        try:
+            value, index = decoder.raw_decode(content)
+        except json.JSONDecodeError:
+            break
+        records.append(value)
+    return records
+
+def load(results_source):
+    if os.path.isfile(results_source):
+        try:
+            with open(results_source, encoding="utf-8") as stream:
+                records = decode_records(stream.read())
+            return [
+                record for record in records
+                if isinstance(record, dict)
+                and record.get("task")
+                and record.get("condition") in {"A", "B"}
+            ]
+        except Exception as exc:
+            print(f"warn: skipping {results_source}: {exc}", file=sys.stderr)
+            return []
+
     runs = []
-    for f in glob.glob(os.path.join(results_dir, "*.json")):
+    for f in glob.glob(os.path.join(results_source, "*.json")):
         if f.endswith(".transcript.json"):
             continue
         try:
             with open(f) as fh:
-                content = fh.read().strip()
-                import json
-                decoder = json.JSONDecoder()
-                idx = 0
-                records = []
-                while idx < len(content):
-                    content = content[idx:].lstrip()
-                    if not content: break
-                    try:
-                        obj, idx = decoder.raw_decode(content)
-                        records.append(obj)
-                    except json.JSONDecodeError:
-                        break
-                
+                records = decode_records(fh.read())
                 valid_records = [r for r in records if isinstance(r, dict) and r.get("task")]
                 if valid_records:
                     rec = valid_records[-1]
