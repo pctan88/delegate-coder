@@ -15,6 +15,8 @@ or Codex retains planning, dependency analysis, security review, cumulative
 diff review, and final acceptance. This feature layers on the foundational worker orchestration documented in
 [DELEGATE-CODER-000](../DELEGATE-CODER-000-worker-orchestration/README.md); the
 default `read`/`exec` adapters and benchmark policy are recorded there.
+The resilience follow-up in PR #6 is documented separately as
+[DELEGATE-CODER-002](../DELEGATE-CODER-002-resilient-contracts/README.md).
 
 | | |
 |---|---|
