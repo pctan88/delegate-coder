@@ -37,7 +37,8 @@ v2 adds several new config options: **model selection**, **enable/scope** guards
 
 ### As a plugin (recommended)
 
-This repo is a Claude Code plugin marketplace. From inside Claude Code:
+This repo is a Claude Code marketplace and a Codex plugin marketplace. From
+inside Claude Code:
 
 ```
 /plugin marketplace add pctan88/delegate-coder
@@ -45,6 +46,39 @@ This repo is a Claude Code plugin marketplace. From inside Claude Code:
 ```
 
 This installs the skill **and** the `/delegate-*` slash commands.
+
+### In Codex
+
+The repository also ships a Codex plugin manifest and repo marketplace. After
+cloning the repository, add the local marketplace and open Codex's plugin
+browser:
+
+```bash
+cd delegate-coder
+codex plugin marketplace add .
+codex
+```
+
+In Codex, run `/plugins`, choose **Tan Tools**, and install **Delegate Coder**.
+Then start a new task and invoke the skill with `$delegate-coder` or by asking
+Codex to delegate a bounded implementation, refactor, repository read, or
+first-pass review to a configured worker. Claude's `/delegate-*` command files
+remain available in Claude Code; Codex uses the skill and its natural-language
+workflow instead.
+
+For a skill-only installation (without the plugin browser), use the existing
+installer with Codex's skill directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pctan88/delegate-coder/main/install.sh \
+  | bash -s -- --target "$HOME/.agents/skills"
+```
+
+The runtime configuration is still read from
+`.claude/delegate-coder.json` so the same project setup works from Claude Code
+and Codex. Local Ollama/Qwen is selected through the existing worker-agent
+configuration; keep planning, architecture, security-sensitive decisions, and
+final diff/test acceptance in the orchestrator.
 
 ### Manual (skill only)
 

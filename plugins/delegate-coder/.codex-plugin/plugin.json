@@ -1,0 +1,40 @@
+{
+  "name": "delegate-coder",
+  "version": "0.2.2",
+  "description": "Delegate execution-heavy coding work to a cheaper local or CLI worker agent while the orchestrator keeps planning and final review.",
+  "author": {
+    "name": "Tan",
+    "email": "tanpoicheong@gmail.com"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/pctan88/delegate-coder",
+  "repository": "https://github.com/pctan88/delegate-coder",
+  "keywords": [
+    "delegate",
+    "worker-agent",
+    "token-savings",
+    "local-qwen",
+    "codex",
+    "code-review",
+    "refactoring"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Delegate Coder",
+    "shortDescription": "Route heavy coding work to a cheaper worker.",
+    "longDescription": "Delegate Coder routes bulk reading, implementation, refactoring, and first-pass review to a configured CLI worker such as local Qwen, MiMo, Aider, Codex, Gemini, or OpenCode. The orchestrator remains responsible for planning, architecture, safety checks, and final acceptance.",
+    "developerName": "Tan",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Code review"
+    ],
+    "websiteURL": "https://github.com/pctan88/delegate-coder",
+    "defaultPrompt": [
+      "Use the delegate worker to summarize this repository.",
+      "Use local Qwen for this bounded implementation task.",
+      "Review the worker diff and run the project's tests."
+    ]
+  }
+}
