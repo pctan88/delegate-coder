@@ -401,6 +401,9 @@ PY
 }
 
 worktree_needs_restore() {
+  if index_needs_restore; then
+    return 0
+  fi
   [[ "$STAGED" -eq 1 ]] && return 0
   python3 - "$ROOT_DIR" "$SNAPSHOT_ROOT" <<'PY'
 import json
@@ -457,14 +460,25 @@ restore_index() {
   return 0
 }
 
+index_needs_restore() {
+  [[ "$INDEX_READY" -eq 1 ]] || return 1
+  if [[ "$INDEX_EXISTS" -eq 1 ]]; then
+    [[ -e "$INDEX_PATH" ]] || return 0
+    cmp -s "$INDEX_SNAPSHOT" "$INDEX_PATH" || return 0
+  else
+    [[ -e "$INDEX_PATH" ]] && return 0
+  fi
+  return 1
+}
+
 restore_worktree() {
   [[ "$SNAPSHOT_READY" -eq 1 && "$RESTORED" -eq 0 ]] || return 0
-  restore_index || return 1
+  local restore_status=0
+  restore_index || restore_status=1
   if [[ "$STAGED" -eq 1 ]]; then
-    restore_target || return 1
-    RESTORED=0
+    restore_target || restore_status=1
   fi
-  python3 - "$ROOT_DIR" "$SNAPSHOT_ROOT" <<'PY' || return 1
+  if ! python3 - "$ROOT_DIR" "$SNAPSHOT_ROOT" <<'PY'
 import json
 import os
 import pathlib
@@ -513,8 +527,16 @@ for item in manifest:
     os.chmod(temporary, item["mode"])
     os.replace(temporary, path)
 PY
-  STAGED=0
-  RESTORED=1
+  then
+    restore_status=1
+  fi
+  if [[ "$restore_status" -eq 0 ]]; then
+    STAGED=0
+    RESTORED=1
+  else
+    RESTORED=0
+  fi
+  return "$restore_status"
 }
 
 build_request() {
@@ -698,10 +720,19 @@ emit_report() {
   if [[ "$FINAL_STATUS" == PASS ]]; then
     if cmp -s "$ORIGINAL_FILE" "$CANDIDATE_FILE"; then
       FINAL_STATUS=NOOP
-      restore_worktree || ERROR_MESSAGE="could not restore unchanged candidate"
+      if ! restore_worktree; then
+        FINAL_STATUS=FAIL
+        ERROR_MESSAGE="could not restore unchanged candidate"
+      fi
     else
-      ACCEPTED=1
-      STAGED=0
+      if ! restore_index; then
+        FINAL_STATUS=FAIL
+        ERROR_MESSAGE="could not restore the pre-contract Git index"
+        restore_worktree || true
+      else
+        ACCEPTED=1
+        STAGED=0
+      fi
     fi
   elif [[ "$SNAPSHOT_READY" -eq 1 ]] && worktree_needs_restore; then
     restore_worktree || ERROR_MESSAGE="could not restore worktree after failure"

@@ -50,8 +50,9 @@ send code to a third-party provider.
 - Stage candidates on the target path for tests, promote only after success, and
   restore existing content/mode, modified tracked outside files, new
   nonignored outside files, and index entries on every failure. Ignored
-  dependency/cache/build trees are not snapshotted. Preserve earlier accepted
-  batch children.
+  dependency/cache/build trees are not snapshotted. Restore the pre-child index
+  before accepting a successful changed candidate so the target remains
+  unstaged. Preserve earlier accepted batch children.
 - Apply newline normalization, context truncation protection, bounded generation
   and test timeouts, one correction retry, and explicit `NOOP` status.
 - Record contract start/end status, duration, model, exit code, and retries in
@@ -103,6 +104,9 @@ send code to a third-party provider.
 - Arbitrary `test_command` strings execute locally; callers must treat the
   contract source as trusted. Test commands must not mutate Git references or
   make commits; reference mutations are outside transactional rollback.
+- Runtime-log setup migrates only the exact marked delegate-coder legacy
+  exclusion. An unmarked/user-owned broad `/.claude/` rule is preserved and
+  blocks contract preflight rather than changing user Git policy.
 - Ollama eviction can affect unrelated local work; the operator-visible warning
   and selected-model exception are the current trade-off *(confirm UX)*.
 

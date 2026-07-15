@@ -57,14 +57,18 @@ contract JSON
   child path, worktree cleanliness, and configured numeric limits before
   creating an isolation branch. Contract setup adds only
   `/.claude/delegate-coder.log` to `.git/info/exclude`, leaving the runtime
-  audit log available without hiding other `.claude/*` changes; a legacy broad
-  `/.claude/` rule is removed during this migration.
+  audit log available without hiding other `.claude/*` changes. Only the exact
+  marked delegate-coder legacy stanza may be migrated; an unmarked broad rule
+  fails preflight with remediation.
 - Structured JSON output is the only accepted transport; markdown/source fences
   are ordinary UTF-8 content and are never parsed as transport delimiters.
 - The complete initial prompt is estimated before Ollama model eviction or an
   HTTP request; correction prompts are estimated again with the failure log.
 - Generation and tests have bounded timeouts. A failed test can trigger only
   one retry.
+- A successful changed child restores its pre-child Git index before reporting
+  `PASS`, leaving the accepted target modification unstaged; index restoration
+  failure is itself a contract failure.
 
 ## Runtime configuration
 

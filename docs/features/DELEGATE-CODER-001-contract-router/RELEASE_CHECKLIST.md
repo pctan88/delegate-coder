@@ -29,12 +29,16 @@
       untracked outside files, tracked/new `.claude/*` files, staged target and
       outside files, and failed new-file contracts restore bytes, modes, the
       Git index, and Git-visible nonignored files safely and report `Restored`.
+- [ ] Confirm successful changed contracts restore the pre-child index and
+      leave accepted target changes unstaged; index restoration failure cannot
+      report `PASS`.
 - [ ] Confirm preflight rejects dirty `main`, malformed contracts, invalid later
       batch paths, oversized initial prompts, and zero numeric project settings
       before any `delegate/contract-*` branch or Ollama eviction is performed.
 - [ ] Confirm `.claude/delegate-coder.log` is available to stats while the
       idempotent `.git/info/exclude` rule excludes only that file and keeps it
-      out of consumer worktree changes; other `.claude/*` files remain visible.
+      out of consumer worktree changes; exact marked legacy migration is
+      idempotent, while unmarked/user-owned broad rules remain and fail safely.
 
 ## Benchmark and rollback
 

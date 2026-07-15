@@ -190,22 +190,51 @@ resolve_contract_settings() {
 }
 
 ensure_runtime_log_ignored() {
-  local root="$1" exclude cleaned
+  local root="$1" exclude migration_status
   exclude="$(git -C "$root" rev-parse --git-path info/exclude)" || return 1
   mkdir -p "$(dirname "$exclude")" || return 1
   touch "$exclude" || return 1
-  # Remove the broad rule written by older delegate-coder versions before
-  # installing the narrow runtime-log rule. Other .claude files must remain
-  # visible to cleanliness and transactional rollback checks.
-  if grep -Fxq '/.claude/' "$exclude" 2>/dev/null; then
-    cleaned="$(mktemp "${exclude}.XXXXXX")" || return 1
-    grep -Fvx '/.claude/' "$exclude" > "$cleaned" || true
-    chmod "$(stat -f '%Lp' "$exclude" 2>/dev/null || stat -c '%a' "$exclude" 2>/dev/null || echo 644)" "$cleaned" 2>/dev/null || true
-    mv "$cleaned" "$exclude" || { rm -f "$cleaned"; return 1; }
+  python3 - "$exclude" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+marker = b"# delegate-coder runtime log (local metadata)"
+broad = b"/.claude/"
+narrow = b"/.claude/delegate-coder.log"
+lines = path.read_bytes().splitlines(keepends=True)
+cleaned = []
+index = 0
+while index < len(lines):
+    current = lines[index].rstrip(b"\r\n")
+    following = lines[index + 1].rstrip(b"\r\n") if index + 1 < len(lines) else None
+    if current == marker and following == broad:
+        index += 2
+        continue
+    cleaned.append(lines[index])
+    index += 1
+
+if any(line.rstrip(b"\r\n") == broad for line in cleaned):
+    print(
+        "contract mode: refusing to remove an unmarked /.claude/ exclusion "
+        "from .git/info/exclude; remove it manually or mark the exact "
+        "delegate-coder legacy stanza before retrying",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+data = b"".join(cleaned)
+if not any(line.rstrip(b"\r\n") == narrow for line in cleaned):
+    if data and not data.endswith(b"\n"):
+        data += b"\n"
+    data += b"\n# delegate-coder runtime log (local metadata)\n" + narrow + b"\n"
+path.write_bytes(data)
+PY
+  migration_status=$?
+  if [[ "$migration_status" -eq 2 ]]; then
+    return 1
   fi
-  grep -Fxq '/.claude/delegate-coder.log' "$exclude" 2>/dev/null || {
-    printf '\n# delegate-coder runtime log (local metadata)\n/.claude/delegate-coder.log\n' >> "$exclude"
-  }
+  [[ "$migration_status" -eq 0 ]] || return 1
 }
 
 prepare_contract_entry() {

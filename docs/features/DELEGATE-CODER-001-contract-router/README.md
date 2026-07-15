@@ -49,9 +49,13 @@ boundaries, and repository-wide reasoning stay on the normal agent path.
   exits restore the Git-visible pre-child snapshot (target bytes/mode, tracked
   and nonignored untracked outside-target files, and index entries); earlier
   accepted batch children remain on the isolated branch.
+- Successful changed contracts restore the pre-child Git index before
+  acceptance, leaving accepted target changes unstaged. Index restoration
+  failure is reported as `FAIL`.
 - Contract setup keeps `.claude/delegate-coder.log` available to `/delegate
-  stats` while ignoring it through `.git/info/exclude`, without a tracked
-  consumer-worktree edit.
+  stats` while ignoring only that file through `.git/info/exclude`, without a
+  tracked consumer-worktree edit. Only the exact marked legacy delegate-coder
+  stanza may be migrated; unmarked broad rules fail safely with remediation.
 - Dispatcher and direct-router preflight validate all batch target paths and
   configured positive numeric limits before creating `delegate/contract-*`.
 - Contract-router tests must pass, including retry, timeout, truncation,

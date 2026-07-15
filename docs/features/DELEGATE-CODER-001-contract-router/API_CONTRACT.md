@@ -84,7 +84,10 @@ the child's Git-visible snapshot of tracked/nonignored files and index entries
 are restored. New nonignored outside-target files are removed. Ignored
 dependency, cache, and build trees are outside the snapshot. A successful
 earlier child in a batch is included in the next child's baseline and is
-preserved when a later child fails.
+preserved when a later child fails. On a successful changed child, the
+pre-child Git index is restored before acceptance, so the accepted target
+remains an unstaged worktree modification. If index restoration fails, the
+child fails rather than reporting `PASS`.
 
 ## Environment defaults
 
@@ -114,8 +117,11 @@ duration, exit code, status, retries, restoration state, branch, errors, and
 all six Ollama metrics. This is local operational telemetry, not a durable task
 database. Contract setup ensures only `.claude/delegate-coder.log` is ignored
 via `.git/info/exclude`; it does not edit a tracked consumer ignore file.
-If an older delegate-coder installation left a broad `/.claude/` exclusion in
-that local file, setup removes that legacy rule before adding the narrow one.
+If an older delegate-coder installation left the exact marked legacy stanza
+(the delegate-coder comment immediately followed by `/.claude/`), setup
+migrates that stanza before adding the narrow one. An unmarked or mixed
+user-owned `/.claude/` exclusion is preserved and causes preflight failure with
+remediation because it would hide outside-target changes.
 
 `test_command` is trusted local code. It must not mutate Git references or make
 commits; reference mutations are outside the transactional rollback guarantee.

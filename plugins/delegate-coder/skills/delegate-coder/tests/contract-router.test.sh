@@ -556,12 +556,49 @@ setup_case legacy-exclude
 EXCLUDE_FILE="$(cd "$CASE_DIR" && git rev-parse --git-path info/exclude)"
 [[ "$EXCLUDE_FILE" == /* ]] || EXCLUDE_FILE="$CASE_DIR/$EXCLUDE_FILE"
 mkdir -p "$(dirname "$EXCLUDE_FILE")"
-printf '/.claude/\n' >> "$EXCLUDE_FILE"
+printf '\n# delegate-coder runtime log (local metadata)\n/.claude/\n' >> "$EXCLUDE_FILE"
 make_contract target.txt "true" "$CASE_DIR/contract.json"
 run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "legacy exclusion migration should pass"
 grep -Fxq '/.claude/delegate-coder.log' "$EXCLUDE_FILE" || fail "legacy migration must install the narrow exclusion"
 ! grep -Fxq '/.claude/' "$EXCLUDE_FILE" || fail "legacy broad exclusion must be removed"
+git -C "$CASE_DIR" add target.txt
+git -C "$CASE_DIR" commit -qm legacy-accepted
+run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "repeated setup should remain idempotent"
+[[ "$(grep -Fc '/.claude/delegate-coder.log' "$EXCLUDE_FILE")" == 1 ]] || fail "repeated setup must not duplicate the narrow exclusion"
 pass "legacy .claude exclusion migration"
+
+# An unmarked user-owned rule is preserved and blocks contract setup with
+# remediation instead of silently changing repository policy.
+setup_case user-exclude
+EXCLUDE_FILE="$(cd "$CASE_DIR" && git rev-parse --git-path info/exclude)"
+[[ "$EXCLUDE_FILE" == /* ]] || EXCLUDE_FILE="$CASE_DIR/$EXCLUDE_FILE"
+printf '/.claude/\n' >> "$EXCLUDE_FILE"
+make_contract target.txt "true" "$CASE_DIR/contract.json"
+set +e
+run_dispatch "$(cat "$CASE_DIR/contract.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "unmarked user exclusion must fail"
+grep -Fxq '/.claude/' "$EXCLUDE_FILE" || fail "user exclusion must remain unchanged"
+! grep -Fxq '/.claude/delegate-coder.log' "$EXCLUDE_FILE" || fail "blocked setup must not install a managed exclusion"
+[[ "$(git -C "$CASE_DIR" branch --show-current)" != delegate/contract-* ]] || fail "user exclusion must block branch creation"
+contains "$STDERR_PATH" 'unmarked /.claude/ exclusion' "user exclusion remediation"
+pass "unmarked user exclusion safety"
+
+# A managed stanza plus a separate user rule is also preserved and rejected.
+setup_case duplicate-exclude
+EXCLUDE_FILE="$(cd "$CASE_DIR" && git rev-parse --git-path info/exclude)"
+[[ "$EXCLUDE_FILE" == /* ]] || EXCLUDE_FILE="$CASE_DIR/$EXCLUDE_FILE"
+printf '\n# delegate-coder runtime log (local metadata)\n/.claude/\n/.claude/\n' >> "$EXCLUDE_FILE"
+make_contract target.txt "true" "$CASE_DIR/contract.json"
+set +e
+run_dispatch "$(cat "$CASE_DIR/contract.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "duplicate managed/user exclusion must fail"
+[[ "$(grep -Fc '/.claude/' "$EXCLUDE_FILE")" == 2 ]] || fail "duplicate exclusion rules must remain unchanged"
+contains "$STDERR_PATH" 'unmarked /.claude/ exclusion' "duplicate exclusion remediation"
+pass "duplicate managed and user exclusions"
 
 # Tracked Claude configuration is part of the transactional snapshot.
 setup_case claude-tracked
@@ -618,6 +655,17 @@ set -e
 [[ ! -e "$CASE_DIR/new-outside.txt" ]] || fail "new outside-target file must be removed"
 [[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "new outside-target failure must restore target"
 pass "untracked outside-target rollback"
+
+# A successful verification may stage the target, but the accepted candidate
+# must leave the pre-child index intact and remain an unstaged worktree edit.
+setup_case staged-pass
+make_contract target.txt "git add target.txt; grep -q '^good$' target.txt" "$CASE_DIR/contract.json"
+run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "staged successful contract should pass"
+contains "$STDOUT_PATH" '- Status: PASS' "staged successful contract status"
+[[ "$(cat "$CASE_DIR/target.txt")" == good ]] || fail "staged successful contract should accept output"
+[[ -z "$(git -C "$CASE_DIR" diff --cached --name-only)" ]] || fail "successful contract must restore the pre-child index"
+[[ "$(git -C "$CASE_DIR" status --porcelain --untracked-files=all)" == ' M target.txt' ]] || fail "accepted target must remain unstaged"
+pass "successful staged-target index rollback"
 
 # A verification command that stages target and outside files must restore the
 # pre-child index as well as the worktree.
@@ -679,6 +727,23 @@ printf 'original\n' | cmp -s - "$CASE_DIR/second.txt" || fail "staged failed tar
 [[ ! -e "$CASE_DIR/outside-stage.txt" ]] || fail "staged outside file must be removed"
 [[ -z "$(git -C "$CASE_DIR" diff --cached --name-only)" ]] || fail "staged later failure must restore the Git index"
 pass "batch staged rollback preserves earlier child"
+
+# Each successful child starts from the previous child's restored index.
+setup_case batch-staged-pass
+printf 'original\n' > "$CASE_DIR/second.txt"
+git -C "$CASE_DIR" add second.txt
+git -C "$CASE_DIR" commit -qm second
+python3 - "$CASE_DIR/batch.json" <<'PY'
+import json, sys
+json.dump([
+    {"target_file": "target.txt", "instructions": "stage first", "test_command": "git add target.txt; grep -q '^good$' target.txt"},
+    {"target_file": "second.txt", "instructions": "observe clean index", "test_command": "test -z \"$(git diff --cached --name-only)\"; git add second.txt; grep -q '^good$' second.txt"},
+], open(sys.argv[1], "w"))
+PY
+CURL_MODE=good run_dispatch "$(cat "$CASE_DIR/batch.json")" || fail "successful staged batch should pass"
+[[ -z "$(git -C "$CASE_DIR" diff --cached --name-only)" ]] || fail "successful batch must restore each child index"
+[[ "$(git -C "$CASE_DIR" status --porcelain --untracked-files=all)" == $' M second.txt\n M target.txt' ]] || fail "successful batch targets must remain unstaged"
+pass "successful batch index baselines"
 
 # Ignored dependency trees are not copied into the transactional snapshot.
 setup_case ignored-dependencies

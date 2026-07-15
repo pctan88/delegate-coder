@@ -32,6 +32,8 @@ acceptance evidence for future maintenance.
    bytes/mode/existence plus Git-visible tracked/nonignored files and the index,
    and preserve the structured input, output, timeout, rollback, and retry
    semantics in `API_CONTRACT.md`.
+   Restore the pre-child index before accepting a changed candidate so accepted
+   target edits remain unstaged.
 3. Add or update deterministic fake-Ollama tests before changing router behavior.
 4. Run the contract-router suite, core suite, deterministic benchmark reporter
    tests, and `git diff --check`.
@@ -50,6 +52,9 @@ acceptance evidence for future maintenance.
   worktree or index; ignored dependency/cache/build trees are not snapshotted.
   Reports include restoration, attributable pre-contract diff, batch counts, and
   Ollama metrics. Earlier accepted batch children remain intact.
+- Runtime-log migration changes only the exact marked delegate-coder legacy
+  stanza; unmarked/user-owned broad `.claude` exclusions are preserved and fail
+  preflight safely.
 - The local benchmark is additive, five-warm, and never modifies the frozen v1
   results or raw data.
 - No unrelated files or benchmark artifacts are changed.
