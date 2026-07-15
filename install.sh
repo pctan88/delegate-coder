@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — install the delegate-coder skill for Claude Code.
+# install.sh — install the delegate-coder skill for Claude Code or Codex.
 # Usage: install.sh [--target <dir>]   (default: ~/.claude/skills)
 set -euo pipefail
 TARGET="$HOME/.claude/skills"
@@ -13,4 +13,4 @@ mkdir -p "$TARGET"
 rm -rf "$TARGET/delegate-coder"
 cp -r "$TMP/repo/plugins/delegate-coder/skills/delegate-coder" "$TARGET/delegate-coder"
 chmod +x "$TARGET/delegate-coder/scripts/"*.sh
-echo "Installed. Open Claude Code and try: \"use the delegate worker to summarize this repo\""
+echo "Installed. Open Claude Code or Codex and try: \"use the delegate worker to summarize this repo\""
