@@ -218,7 +218,12 @@ d="$(mk dt_npm_ph)"; printf '{ "scripts": { "test": "echo \\"Error: no test spec
 pass "detect-test: npm placeholder ignored"
 
 d="$(mk dt_py)";    : > "$d/pytest.ini"
-[[ "$(dt "$d")" == "python3 -m pytest -q" ]] || fail "pytest.ini -> pytest"
+# Phase 1: Smart Test Verification (pytest or unittest fallback)
+if command -v pytest >/dev/null 2>&1; then
+  [[ "$(dt "$d")" == "python3 -m pytest -q" ]] || fail "pytest.ini -> pytest"
+else
+  [[ "$(dt "$d")" == "python3 -m unittest discover" ]] || fail "pytest.ini -> unittest fallback"
+fi
 pass "detect-test: pytest"
 
 d="$(mk dt_go)";    : > "$d/go.mod"

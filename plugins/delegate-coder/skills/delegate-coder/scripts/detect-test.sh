@@ -23,7 +23,12 @@ fi
 if [[ -f pytest.ini ]] \
    || { [[ -f pyproject.toml ]] && grep -q pytest pyproject.toml 2>/dev/null; } \
    || [[ -d tests ]]; then
-  echo "python3 -m pytest -q"
+  # Phase 1: Smart Test Verification
+  if command -v pytest >/dev/null 2>&1; then
+    echo "python3 -m pytest -q"
+  else
+    echo "python3 -m unittest discover"
+  fi
   exit 0
 fi
 
