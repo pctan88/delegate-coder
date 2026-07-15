@@ -852,10 +852,12 @@ setup_case secret_context
 printf 'secret-key\n' > "$CASE_DIR/.npmrc"
 mkdir -p "$CASE_DIR/.aws"
 printf 'aws-cred\n' > "$CASE_DIR/.aws/config"
-git -C "$CASE_DIR" add .npmrc .aws/config
+mkdir -p "$CASE_DIR/.AWS"
+printf 'aws-cred-up\n' > "$CASE_DIR/.AWS/config"
+git -C "$CASE_DIR" add .npmrc .aws/config .AWS/config
 git -C "$CASE_DIR" commit -qm add-secrets
 
-for secret_file in ".npmrc" ".aws/config"; do
+for secret_file in ".npmrc" ".aws/config" ".AWS/config" ".git/config"; do
   context_json="{\"target_file\": \"target.txt\", \"instructions\": \"update\", \"test_command\": \"true\", \"context_files\": [\"$secret_file\"]}"
   set +e
   run_dispatch "$context_json"

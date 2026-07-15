@@ -605,9 +605,9 @@ if context_files_path.exists():
             if cf_pure.is_absolute() or cf.startswith("~/") or ".." in cf_pure.parts:
                 raise SystemExit(f"contract-router: context file resolves outside the repository: {cf}")
 
-            # Check directories
+            # Check directories (case-insensitive, including .git)
             for part in cf_pure.parts:
-                if part in [".aws", ".ssh", ".kube", ".docker"]:
+                if part.lower() in [".aws", ".ssh", ".kube", ".docker", ".git"]:
                     raise SystemExit(f"contract-router: context file path contains a blocked sensitive directory: {cf}")
 
             # Check for secrets

@@ -192,9 +192,9 @@ for index, item in enumerate(items, 1):
         if cf_pure.is_absolute() or cf.startswith("~/") or ".." in cf_pure.parts:
             raise ValueError(f"context file resolves outside the repository: {cf}")
 
-        # Check directories for blocked sensitive ones
+        # Check directories for blocked sensitive ones (case-insensitive, including .git)
         for part in cf_pure.parts:
-            if part in [".aws", ".ssh", ".kube", ".docker"]:
+            if part.lower() in [".aws", ".ssh", ".kube", ".docker", ".git"]:
                 raise ValueError(f"context file path contains a blocked sensitive directory: {cf}")
 
         # Check for secret-like filenames

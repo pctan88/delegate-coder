@@ -5,7 +5,7 @@
 - [x] PR #6 implementation is linked from this pack.
 - [x] Parent 000/001 decision logs contain correction links and no new 002
       behavior is documented as belonging to them.
-- [x] Maintainer confirms the contract boundary and local-privacy policy.
+- [ ] Maintainer confirms the contract boundary and local-privacy policy.
 
 ## Safety gates
 
