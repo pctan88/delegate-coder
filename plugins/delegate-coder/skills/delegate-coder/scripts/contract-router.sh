@@ -175,6 +175,10 @@ for index, item in enumerate(items, 1):
     for key in ("target_file", "instructions", "test_command"):
         if not isinstance(item.get(key), str):
             raise ValueError(f"contract {index}: {key} must be a string")
+    # Phase 2: validate optional context_files
+    if "context_files" in item and item["context_files"] is not None:
+        if not isinstance(item["context_files"], list) or not all(isinstance(f, str) for f in item["context_files"]):
+            raise ValueError(f"contract {index}: context_files must be a JSON array of strings")
 PY
     then
       return 0
@@ -307,6 +311,17 @@ for key in ("target_file", "instructions", "test_command"):
     if not isinstance(field, str):
         raise ValueError(f"{key} must be a string")
     (destination / key).write_text(field)
+
+# Phase 2: parse context_files using python/jq robust methods
+context_files = value.get("context_files")
+if context_files is None:
+    context_files = []
+elif not isinstance(context_files, list):
+    raise ValueError("context_files must be a JSON array")
+for f in context_files:
+    if not isinstance(f, str):
+        raise ValueError("context_files items must be strings")
+(destination / "context_files.json").write_text(json.dumps(context_files, ensure_ascii=False))
 PY
 }
 
@@ -317,6 +332,8 @@ parse_contract_regex() {
     [[ -n "$value" ]] || return 1
     printf '%s' "$value" > "$WORK_DIR/parsed/$key"
   done
+  # Phase 2: ensure context_files.json has an empty array fallback
+  echo "[]" > "$WORK_DIR/parsed/context_files.json"
 }
 
 snapshot_target() {
@@ -543,12 +560,12 @@ build_request() {
   local failure_file="${1:-}"
   local source_file="$ORIGINAL_FILE"
   [[ -z "$failure_file" ]] || source_file="$TARGET_PATH"
-  python3 - "$REQUEST_FILE" "$TARGET_FILE" "$INSTRUCTIONS_FILE" "$source_file" "$failure_file" "$MODEL" "$SYSTEM_PROMPT" "$NUM_CTX" "$KEEP_ALIVE" <<'PY'
+  python3 - "$REQUEST_FILE" "$TARGET_FILE" "$INSTRUCTIONS_FILE" "$source_file" "$failure_file" "$MODEL" "$SYSTEM_PROMPT" "$NUM_CTX" "$KEEP_ALIVE" "$ROOT_DIR" "$WORK_DIR/parsed/context_files.json" <<'PY'
 import json
 import pathlib
 import sys
 
-request_path, target, instructions_path, source_path, failure_path, model, system_prompt, num_ctx, keep_alive = sys.argv[1:]
+request_path, target, instructions_path, source_path, failure_path, model, system_prompt, num_ctx, keep_alive, root_dir, context_files_json = sys.argv[1:]
 instructions = pathlib.Path(instructions_path).read_bytes().decode("utf-8")
 source_bytes = pathlib.Path(source_path).read_bytes()
 source = source_bytes.decode("utf-8")
@@ -560,10 +577,36 @@ user = (
 if failure_path:
     failure = pathlib.Path(failure_path).read_bytes().decode("utf-8")
     user += f"\nThe verification command failed. Apply a correction and return the complete JSON object again. Exact terminal error output:\n{failure}\n"
+
+# Phase 2: Read-Only Context Support
+context_files_path = pathlib.Path(context_files_json)
+if context_files_path.exists():
+    try:
+        context_files = json.loads(context_files_path.read_text(encoding="utf-8"))
+    except Exception:
+        context_files = []
+    if context_files:
+        user += "\n### READ-ONLY REFERENCE CONTEXT (DO NOT EDIT THESE FILES) ###\n"
+        root = pathlib.Path(root_dir)
+        for cf in context_files:
+            cf_path = root / cf
+            if cf_path.exists() and cf_path.is_file():
+                try:
+                    cf_content = cf_path.read_text(encoding="utf-8", errors="replace")
+                    user += f"\nFile: {cf}\n```\n{cf_content}\n```\n"
+                except Exception:
+                    pass
+
 prompt_tokens = (len((system_prompt + user).encode("utf-8")) + 2) // 3
 expected_output_tokens = max(256, (len(source_bytes) + 2) // 3)
 reserved_tokens = 256
-estimated_total = prompt_tokens + expected_output_tokens + reserved_tokens
+output_budget = expected_output_tokens + reserved_tokens
+
+# Phase 1: Output Budgeting check (min 4096 default)
+if not source_bytes or len(source_bytes) == 0 or output_budget < 4096:
+    output_budget = 4096
+
+estimated_total = prompt_tokens + output_budget
 limit = int(num_ctx)
 if estimated_total > limit:
     raise SystemExit(f"contract-router: estimated prompt+output size {estimated_total} tokens exceeds DELEGATE_NUM_CTX={limit}")
@@ -579,7 +622,7 @@ payload = {
     "prompt": user,
     "stream": False,
     "format": schema,
-    "options": {"num_ctx": limit, "temperature": 0, "num_predict": expected_output_tokens + reserved_tokens},
+    "options": {"num_ctx": limit, "temperature": 0, "num_predict": output_budget},
     "keep_alive": keep_alive,
 }
 pathlib.Path(request_path).write_text(json.dumps(payload, ensure_ascii=False))
@@ -671,7 +714,53 @@ restore_target() {
   RESTORED=1
 }
 
+run_preflight() {
+  local ext="${TARGET_FILE##*.}"
+  local preflight_cmd=""
+
+  case "$ext" in
+    sh)
+      preflight_cmd="bash -n \"$TARGET_PATH\""
+      ;;
+    py)
+      if command -v python3 >/dev/null 2>&1; then
+        preflight_cmd="python3 -c 'import sys, py_compile; sys.exit(0 if py_compile.compile(\"$TARGET_PATH\", cfile=\"$WORK_DIR/target.pyc\") else 1)'"
+      elif command -v python >/dev/null 2>&1; then
+        preflight_cmd="python -c 'import sys, py_compile; sys.exit(0 if py_compile.compile(\"$TARGET_PATH\", cfile=\"$WORK_DIR/target.pyc\") else 1)'"
+      fi
+      ;;
+    js|jsx)
+      if command -v node >/dev/null 2>&1; then
+        preflight_cmd="node --check \"$TARGET_PATH\""
+      fi
+      ;;
+    ts|tsx)
+      if command -v tsc >/dev/null 2>&1; then
+        preflight_cmd="tsc --noEmit \"$TARGET_PATH\""
+      fi
+      ;;
+  esac
+
+  if [[ -n "$preflight_cmd" ]]; then
+    echo "contract-router: running syntax preflight check: $preflight_cmd" >&2
+    eval "$preflight_cmd" > "$TEST_LOG" 2>&1
+    local preflight_status=$?
+    if [[ "$preflight_status" -ne 0 ]]; then
+      echo "contract-router: preflight check failed with exit code $preflight_status" >&2
+      return "$preflight_status"
+    fi
+  fi
+  return 0
+}
+
 run_tests() {
+  # Phase 2: Fail-Fast Syntax Preflight
+  run_preflight
+  local preflight_rc=$?
+  if [[ "$preflight_rc" -ne 0 ]]; then
+    return "$preflight_rc"
+  fi
+
   echo "contract-router: running verification" >&2
   if command -v timeout >/dev/null 2>&1; then
     (cd "$ROOT_DIR" && timeout "$TEST_TIMEOUT" bash -c "$TEST_COMMAND") > "$TEST_LOG" 2>&1

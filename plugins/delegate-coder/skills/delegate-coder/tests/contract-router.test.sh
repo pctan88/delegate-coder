@@ -82,6 +82,8 @@ if [[ "$mode" == outside-new ]]; then printf 'changed\n' > new-outside.txt; fi
 if [[ "$mode" == claude-tracked ]]; then printf 'changed\n' > .claude/settings.json; fi
 if [[ "$mode" == claude-new ]]; then printf 'changed\n' > .claude/unexpected; fi
 if [[ "$mode" == retry && "$count" -eq 1 ]]; then content=bad; fi
+if [[ "$mode" == syntax_error && "$count" -eq 1 ]]; then content="invalid syntax python code"; fi
+if [[ "$mode" == syntax_error && "$count" -eq 2 ]]; then content="print('good')"; fi
 if [[ "$mode" == bad ]]; then content=bad; fi
 if [[ "$mode" == batch-fail && "$count" -le 2 ]]; then content=bad; fi
 if [[ "$mode" == batch-later && "$count" -ge 2 ]]; then content=bad; fi
@@ -782,5 +784,57 @@ set -e
 [[ "$status" -ne 0 ]] || fail "non-Git contract must fail"
 contains "$NO_GIT_DIR/stderr" 'requires a Git worktree' "non-Git error"
 pass "non-Git worktree rejection"
+
+# Phase 1: Output token budget for new/empty files enforces 4096 minimum
+setup_case budget_min
+make_contract new.txt "true" "$CASE_DIR/contract.json"
+run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "new.txt contract should run"
+contains "$ARTIFACT_DIR/request.1" '"num_predict": 4096' "expected minimum output budget of 4096"
+pass "minimum output token budget enforced"
+
+# Phase 2: context_files support: validation and injection
+setup_case context_test
+printf 'ref-content\n' > "$CASE_DIR/ref.txt"
+git -C "$CASE_DIR" add ref.txt
+git -C "$CASE_DIR" commit -qm add-ref
+context_json='{"target_file": "target.txt", "instructions": "update target", "test_command": "true", "context_files": ["ref.txt"]}'
+run_dispatch "$context_json" || fail "contract with context_files should run"
+contains "$ARTIFACT_DIR/request.1" '### READ-ONLY REFERENCE CONTEXT (DO NOT EDIT THESE FILES) ###' "expected reference context header in prompt"
+contains "$ARTIFACT_DIR/request.1" 'File: ref.txt' "expected context file name in prompt"
+contains "$ARTIFACT_DIR/request.1" 'ref-content' "expected context file contents in prompt"
+pass "context_files prompt injection"
+
+# Phase 2: context_files rejection: outside repository
+setup_case context_reject_outside
+context_json='{"target_file": "target.txt", "instructions": "update target", "test_command": "true", "context_files": ["../outside.txt"]}'
+set +e
+run_dispatch "$context_json"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "traversal context_file should be rejected"
+contains "$STDERR_PATH" 'context file resolves outside the repository' "expected context file traversal error"
+pass "context_files outside repo rejection"
+
+# Phase 2: context_files rejection: missing file
+setup_case context_reject_missing
+context_json='{"target_file": "target.txt", "instructions": "update target", "test_command": "true", "context_files": ["missing.txt"]}'
+set +e
+run_dispatch "$context_json"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "missing context_file should be rejected"
+contains "$STDERR_PATH" 'context file does not exist' "expected context file missing error"
+pass "context_files missing file rejection"
+
+# Phase 2: Fail-fast syntax preflight check: python script with syntax error
+setup_case syntax_preflight
+printf 'original_code\n' > "$CASE_DIR/target.py"
+git -C "$CASE_DIR" add target.py
+git -C "$CASE_DIR" commit -qm add-py
+context_json='{"target_file": "target.py", "instructions": "update target", "test_command": "true"}'
+CURL_MODE=syntax_error run_dispatch "$context_json" || fail "syntax_error correction should pass"
+[[ "$(cat "$CURL_COUNT_FILE_PATH")" == 2 ]] || fail "syntax preflight failure should cause exactly one retry"
+contains "$ARTIFACT_DIR/request.2" 'target.py' "retry request should include python compiler/syntax error"
+pass "fail-fast syntax preflight check"
 
 echo "All contract-router tests passed."

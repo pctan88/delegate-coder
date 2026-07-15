@@ -100,6 +100,10 @@ for item in items:
     for key in ("target_file", "instructions", "test_command"):
         if not isinstance(item.get(key), str):
             raise ValueError(f"{key} must be a string")
+    # Phase 2: Accept optional context_files array in entry validation
+    if "context_files" in item and item["context_files"] is not None:
+        if not isinstance(item["context_files"], list) or not all(isinstance(f, str) for f in item["context_files"]):
+            raise ValueError("context_files must be an array of strings")
 PY
     then
       return 0
@@ -172,6 +176,26 @@ for index, item in enumerate(items, 1):
     )
     if status:
         raise ValueError(f"target_file is dirty; commit or stash it before contract execution: {target}")
+
+    # Phase 2: Validate context_files paths
+    context_files = item.get("context_files", [])
+    if context_files is None:
+        context_files = []
+    if not isinstance(context_files, list):
+        raise ValueError(f"contract {index}: context_files must be a JSON array")
+    for cf in context_files:
+        if not isinstance(cf, str) or not cf:
+            raise ValueError(f"contract {index}: context_files items must be non-empty strings")
+        cf_pure = PurePosixPath(cf)
+        if cf_pure.is_absolute() or cf.startswith("~/") or ".." in cf_pure.parts:
+            raise ValueError(f"context file resolves outside the repository: {cf}")
+        cf_path = root / pathlib.Path(cf)
+        if not cf_path.exists():
+            raise ValueError(f"context file does not exist: {cf}")
+        if cf_path.is_symlink():
+            raise ValueError(f"context file must not be a symlink: {cf}")
+        if not cf_path.is_file():
+            raise ValueError(f"context file must be a regular file: {cf}")
 PY
 }
 
@@ -277,7 +301,8 @@ if [[ "$MODE" == "contract" ]]; then
   append_json_event "$CONTRACT_LOGFILE" local-ollama "$CONTRACT_MODEL" contract start branch "$CONTRACT_BRANCH"
   CONTRACT_REPORT="$(mktemp "${TMPDIR:-/tmp}/delegate-coder-report.XXXXXX")" || exit 1
   export DELEGATE_MODEL="$CONTRACT_MODEL" DELEGATE_NUM_CTX="$CONTRACT_NUM_CTX" DELEGATE_KEEP_ALIVE="$CONTRACT_KEEP_ALIVE" DELEGATE_CURL_TIMEOUT="$CONTRACT_CURL_TIMEOUT" DELEGATE_TEST_TIMEOUT="$CONTRACT_TEST_TIMEOUT"
-  "$SCRIPT_DIR/contract-router.sh" "$TASK" > "$CONTRACT_REPORT"
+  # Phase 1: Robust Script Execution (prevent chmod +x loss)
+  bash "$SCRIPT_DIR/contract-router.sh" "$TASK" > "$CONTRACT_REPORT"
   CONTRACT_EXIT=$?
   cat "$CONTRACT_REPORT"
   CONTRACT_STATUS="$(report_value Status "$CONTRACT_REPORT")"
@@ -318,7 +343,8 @@ case "$IMPLEMENTATION_BACKEND" in
       echo "implementation_backend=contract requires a JSON Task Contract; no hosted-agent fallback is performed" >&2
       exit 2
     }
-    exec "$SCRIPT_DIR/delegate.sh" contract "$TASK"
+    # Phase 1: Robust Script Execution (prevent chmod +x loss)
+    exec bash "$SCRIPT_DIR/delegate.sh" contract "$TASK"
     ;;
   *)
     echo "Unsupported implementation_backend: $IMPLEMENTATION_BACKEND" >&2
