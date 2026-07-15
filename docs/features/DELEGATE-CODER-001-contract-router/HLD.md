@@ -13,7 +13,7 @@ Ollama, so the worker does not need a multi-turn tool loop.
 | Component | Responsibility |
 |---|---|
 | `delegate.sh` | Dispatch `contract` mode, isolate stdout report from stderr progress, and append audit start/end events |
-| `contract-router.sh` | Validate before branch creation, snapshot the target and full eligible worktree state, prepare Ollama, generate strict structured output, stage/verify/promote transactionally, retry once, restore failed child mutations, and render attributable report |
+| `contract-router.sh` | Validate before branch creation, snapshot the target and Git-visible tracked/nonignored state, prepare Ollama, generate strict structured output, stage/verify/promote transactionally, retry once, restore failed child mutations and index state, and render attributable report |
 | Ollama `/api/generate` | Produce the complete updated file using the configured local model |
 | `contract-router.test.sh` | Exercise the router with fake Ollama/curl commands and deterministic fixtures |
 | `.claude/delegate-coder.log` | Store operational JSON events for `/delegate stats` and diagnosis |
@@ -43,19 +43,22 @@ contract JSON
   repository, and cannot be a symlink.
 - The parent directory must already exist; a missing target file is allowed for
   new-file contracts.
-- The full worktree must be clean and execution must be on a named isolated
+- The Git-visible worktree must be clean and execution must be on a named isolated
   feature/delegate branch. Dirty targets are rejected.
 - The original file's existence, bytes, and mode are snapshotted before
-  generation. A full eligible worktree snapshot is also taken for each child.
+  generation. A Git-visible snapshot of tracked and nonignored untracked files,
+  plus the Git index, is also taken for each child. Ignored dependency, cache,
+  and build trees are not enumerated.
   A candidate may occupy the target for verification, but promotion happens
   only after success; all unsuccessful exits restore the target and tracked or
-  untracked outside-target mutations. Earlier accepted batch children are part
-  of the next child baseline and remain intact.
+  untracked outside-target mutations and staged/index entries. Earlier accepted
+  batch children are part of the next child baseline and remain intact.
 - Dispatcher and direct-router preflight validate contract shape, every batch
   child path, worktree cleanliness, and configured numeric limits before
-  creating an isolation branch. Contract setup adds `/.claude/` to
-  `.git/info/exclude`, leaving the runtime audit log available without a
-  tracked worktree edit.
+  creating an isolation branch. Contract setup adds only
+  `/.claude/delegate-coder.log` to `.git/info/exclude`, leaving the runtime
+  audit log available without hiding other `.claude/*` changes; a legacy broad
+  `/.claude/` rule is removed during this migration.
 - Structured JSON output is the only accepted transport; markdown/source fences
   are ordinary UTF-8 content and are never parsed as transport delimiters.
 - The complete initial prompt is estimated before Ollama model eviction or an

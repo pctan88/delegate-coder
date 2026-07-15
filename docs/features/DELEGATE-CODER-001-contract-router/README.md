@@ -46,9 +46,9 @@ boundaries, and repository-wide reasoning stay on the normal agent path.
 - The router must reject an estimated oversized prompt before model eviction or
   an HTTP request; output-side `done_reason: length` remains a separate guard.
 - Failed generation, verification, timeout, signal, parser, and outside-target
-  exits restore the full pre-child worktree snapshot (target bytes/mode plus
-  tracked and untracked outside-target files); earlier accepted batch children
-  remain on the isolated branch.
+  exits restore the Git-visible pre-child snapshot (target bytes/mode, tracked
+  and nonignored untracked outside-target files, and index entries); earlier
+  accepted batch children remain on the isolated branch.
 - Contract setup keeps `.claude/delegate-coder.log` available to `/delegate
   stats` while ignoring it through `.git/info/exclude`, without a tracked
   consumer-worktree edit.

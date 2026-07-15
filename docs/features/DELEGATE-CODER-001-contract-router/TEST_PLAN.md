@@ -24,9 +24,9 @@ It must cover:
 | Regex fallback | Damaged wrapper is parsed for the three required fields |
 | Failed verification | Exactly one correction request includes exact failure output |
 | Passing unchanged output | Reports `NOOP` |
-| Input prompt-size guard | Rejects before Ollama/request creation and preserves the target |
+| Input prompt-size guard | Rejects before branch creation, Ollama eviction, request creation, or target replacement |
 | Second verification failure | Reports `FAIL` and makes no third request |
-| Transactional rollback | Restores existing bytes/mode, restores modified tracked outside files, removes new untracked outside files, preserves earlier accepted batch children, and reports `Restored` |
+| Transactional rollback | Restores existing bytes/mode, tracked `.claude/*`, modified tracked outside files, new nonignored outside files, and the Git index; ignores dependency trees; preserves earlier accepted batch children; and reports `Restored` |
 | Truncated model response | Rejects `done_reason=length` without overwriting target |
 | New-file target | Creates a file when its existing parent is inside the repo |
 | Ordered batch | Runs 12 ordered fixtures (and supports 100+), reports counts, and stops after first failure without later requests |
@@ -36,7 +36,7 @@ It must cover:
 | Non-Git/dirty worktree | Rejects before Ollama is contacted |
 | Pre-branch validation | Dirty `main` and malformed contracts fail without creating `delegate/contract-*` |
 | Batch/config preflight | Invalid later batch paths and zero numeric config limits fail without creating `delegate/contract-*` |
-| Consumer audit log | Two sequential contracts in a repo without a `.claude/` ignore leave only accepted target changes; the log remains available |
+| Consumer audit log | Two sequential contracts in a repo without a `.claude/` ignore leave only accepted target changes; only `/.claude/delegate-coder.log` is excluded; the log remains available |
 
 ## Regression checks
 

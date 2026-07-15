@@ -53,6 +53,10 @@ DIFF_FILE="$WORK_DIR/diff"
 METRICS_FILE="$WORK_DIR/metrics.json"
 SNAPSHOT_ROOT="$WORK_DIR/worktree-snapshot"
 SNAPSHOT_READY=0
+INDEX_PATH=""
+INDEX_SNAPSHOT="$WORK_DIR/index.snapshot"
+INDEX_EXISTS=0
+INDEX_READY=0
 
 cleanup() {
   local rc=$?
@@ -219,12 +223,15 @@ PY
   # Validate every child target while the worktree is still on its original
   # branch. Child execution repeats this check against its own baseline.
   local saved_contract_file="$CONTRACT_FILE"
+  REQUEST_FILE="$WORK_DIR/batch-preflight-request.json"
+  RESPONSE_FILE="$WORK_DIR/batch-preflight-response.json"
   while IFS= read -r batch_contract; do
     CONTRACT_FILE="$batch_contract"
     rm -rf "$WORK_DIR/parsed"
     mkdir -p "$WORK_DIR/parsed"
     parse_contract_json || fail "invalid contract batch item"
     snapshot_target
+    build_request || fail "batch contract prompt exceeds the configured context budget"
   done < "$BATCH_MANIFEST"
   CONTRACT_FILE="$saved_contract_file"
 
@@ -361,17 +368,11 @@ payload = snapshot / "payload"
 raw = subprocess.check_output(
     ["git", "-C", str(root), "ls-files", "-co", "--exclude-standard", "-z"]
 )
-ignored = subprocess.check_output(
-    ["git", "-C", str(root), "ls-files", "-o", "--ignored", "--exclude-standard", "-z"]
-)
-raw += ignored
 manifest = []
 for index, encoded in enumerate(raw.split(b"\0")):
     if not encoded:
         continue
     relative = os.fsdecode(encoded)
-    if relative == ".claude" or relative.startswith(".claude/"):
-        continue
     source = root / relative
     if source.is_symlink():
         manifest.append({"path": relative, "kind": "symlink", "mode": source.lstat().st_mode & 0o7777, "target": os.readlink(source)})
@@ -380,7 +381,21 @@ for index, encoded in enumerate(raw.split(b"\0")):
         shutil.copyfile(source, stored)
         manifest.append({"path": relative, "kind": "file", "mode": source.stat().st_mode & 0o7777, "stored": stored.name})
 (snapshot / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+trace = os.environ.get("DELEGATE_SNAPSHOT_TRACE")
+if trace:
+    with pathlib.Path(trace).open("a", encoding="utf-8") as stream:
+        for item in manifest:
+            stream.write(item["path"] + "\n")
 PY
+  INDEX_PATH="$(git -C "$ROOT_DIR" rev-parse --git-path index)"
+  [[ "$INDEX_PATH" = /* ]] || INDEX_PATH="$ROOT_DIR/$INDEX_PATH"
+  if [[ -e "$INDEX_PATH" ]]; then
+    cp -p "$INDEX_PATH" "$INDEX_SNAPSHOT" || fail "could not snapshot the Git index"
+    INDEX_EXISTS=1
+  else
+    INDEX_EXISTS=0
+  fi
+  INDEX_READY=1
   SNAPSHOT_READY=1
   BASE_WORKTREE_STATUS="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)"
 }
@@ -400,14 +415,11 @@ manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
 
 def paths():
     normal = subprocess.check_output(["git", "-C", str(root), "ls-files", "-co", "--exclude-standard", "-z"])
-    ignored = subprocess.check_output(["git", "-C", str(root), "ls-files", "-o", "--ignored", "--exclude-standard", "-z"])
     result = []
-    for encoded in normal.split(b"\0") + ignored.split(b"\0"):
+    for encoded in normal.split(b"\0"):
         if not encoded:
             continue
         relative = os.fsdecode(encoded)
-        if relative == ".claude" or relative.startswith(".claude/"):
-            continue
         if relative not in result:
             result.append(relative)
     return result
@@ -433,8 +445,21 @@ raise SystemExit(1)
 PY
 }
 
+restore_index() {
+  [[ "$INDEX_READY" -eq 1 ]] || return 0
+  if [[ "$INDEX_EXISTS" -eq 1 ]]; then
+    local restored_index="${INDEX_PATH}.delegate-coder-restore.$$"
+    cp -p "$INDEX_SNAPSHOT" "$restored_index" || return 1
+    mv "$restored_index" "$INDEX_PATH" || return 1
+  else
+    rm -f "$INDEX_PATH" || return 1
+  fi
+  return 0
+}
+
 restore_worktree() {
   [[ "$SNAPSHOT_READY" -eq 1 && "$RESTORED" -eq 0 ]] || return 0
+  restore_index || return 1
   if [[ "$STAGED" -eq 1 ]]; then
     restore_target || return 1
     RESTORED=0
@@ -455,16 +480,10 @@ baseline = {item["path"] for item in manifest}
 current = subprocess.check_output(
     ["git", "-C", str(root), "ls-files", "-o", "--exclude-standard", "-z"]
 )
-ignored = subprocess.check_output(
-    ["git", "-C", str(root), "ls-files", "-o", "--ignored", "--exclude-standard", "-z"]
-)
-current += ignored
 for encoded in current.split(b"\0"):
     if not encoded:
         continue
     relative = os.fsdecode(encoded)
-    if relative == ".claude" or relative.startswith(".claude/"):
-        continue
     if relative in baseline:
         continue
     path = root / relative
@@ -731,12 +750,13 @@ if ! parse_contract_json 2>/dev/null; then
   parse_contract_regex || fail "invalid contract: expected target_file, instructions, and test_command strings"
 fi
 snapshot_target
+REQUEST_FILE="$WORK_DIR/request.json"
+RESPONSE_FILE="$WORK_DIR/response.json"
+build_request || fail "initial contract prompt exceeds the configured context budget"
 prepare_worktree
 snapshot_worktree
 prepare_gpu
 
-REQUEST_FILE="$WORK_DIR/request.json"
-RESPONSE_FILE="$WORK_DIR/response.json"
 BASE_OTHER_STATUS="$(status_without_target "$TARGET_FILE")"
 generate_file || fail "initial Ollama generation failed; target was not changed"
 stage_candidate || fail "could not stage generated candidate"

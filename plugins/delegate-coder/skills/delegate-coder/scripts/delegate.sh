@@ -190,12 +190,21 @@ resolve_contract_settings() {
 }
 
 ensure_runtime_log_ignored() {
-  local root="$1" exclude
+  local root="$1" exclude cleaned
   exclude="$(git -C "$root" rev-parse --git-path info/exclude)" || return 1
   mkdir -p "$(dirname "$exclude")" || return 1
   touch "$exclude" || return 1
-  grep -Fxq '/.claude/' "$exclude" 2>/dev/null || {
-    printf '\n# delegate-coder runtime log (local metadata)\n/.claude/\n' >> "$exclude"
+  # Remove the broad rule written by older delegate-coder versions before
+  # installing the narrow runtime-log rule. Other .claude files must remain
+  # visible to cleanliness and transactional rollback checks.
+  if grep -Fxq '/.claude/' "$exclude" 2>/dev/null; then
+    cleaned="$(mktemp "${exclude}.XXXXXX")" || return 1
+    grep -Fvx '/.claude/' "$exclude" > "$cleaned" || true
+    chmod "$(stat -f '%Lp' "$exclude" 2>/dev/null || stat -c '%a' "$exclude" 2>/dev/null || echo 644)" "$cleaned" 2>/dev/null || true
+    mv "$cleaned" "$exclude" || { rm -f "$cleaned"; return 1; }
+  fi
+  grep -Fxq '/.claude/delegate-coder.log' "$exclude" 2>/dev/null || {
+    printf '\n# delegate-coder runtime log (local metadata)\n/.claude/delegate-coder.log\n' >> "$exclude"
   }
 }
 
@@ -208,10 +217,6 @@ prepare_contract_entry() {
   ensure_runtime_log_ignored "$root" || { echo "could not configure the local runtime-log exclusion" >&2; return 1; }
   dirty="$(git status --porcelain --untracked-files=all)"
   [[ -z "$dirty" ]] || { echo "contract mode requires a clean worktree before the first write" >&2; return 1; }
-  if [[ "$branch" == main || "$branch" == master || "$branch" == develop || "$branch" == trunk ]]; then
-    branch="${DELEGATE_CONTRACT_BRANCH:-delegate/contract-$(date +%Y%m%d-%H%M%S)-$$}"
-    git switch -c "$branch" >/dev/null 2>&1 || { echo "could not create isolated contract branch: $branch" >&2; return 1; }
-  fi
   CONTRACT_BRANCH="$branch"
 }
 
@@ -236,7 +241,7 @@ if [[ "$MODE" == "contract" ]]; then
   export DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
   append_json_event "$CONTRACT_LOGFILE" local-ollama "$CONTRACT_MODEL" contract start branch "$CONTRACT_BRANCH"
   CONTRACT_REPORT="$(mktemp "${TMPDIR:-/tmp}/delegate-coder-report.XXXXXX")" || exit 1
-  export DELEGATE_MODEL="$CONTRACT_MODEL" DELEGATE_NUM_CTX="$CONTRACT_NUM_CTX" DELEGATE_KEEP_ALIVE="$CONTRACT_KEEP_ALIVE" DELEGATE_CURL_TIMEOUT="$CONTRACT_CURL_TIMEOUT" DELEGATE_TEST_TIMEOUT="$CONTRACT_TEST_TIMEOUT" DELEGATE_CONTRACT_PREPARED=1 DELEGATE_CONTRACT_BRANCH="$CONTRACT_BRANCH"
+  export DELEGATE_MODEL="$CONTRACT_MODEL" DELEGATE_NUM_CTX="$CONTRACT_NUM_CTX" DELEGATE_KEEP_ALIVE="$CONTRACT_KEEP_ALIVE" DELEGATE_CURL_TIMEOUT="$CONTRACT_CURL_TIMEOUT" DELEGATE_TEST_TIMEOUT="$CONTRACT_TEST_TIMEOUT"
   "$SCRIPT_DIR/contract-router.sh" "$TASK" > "$CONTRACT_REPORT"
   CONTRACT_EXIT=$?
   cat "$CONTRACT_REPORT"

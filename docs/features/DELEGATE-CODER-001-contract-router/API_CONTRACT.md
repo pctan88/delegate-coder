@@ -80,9 +80,11 @@ generation errors. A batch report is `PASS` when every child is `PASS` or
 its retry count is the sum of child retries. The diff compares the pre-contract
 target snapshot to the accepted candidate, not to `HEAD`; outside-target changes
 fail. On an unsuccessful child, the target's original existence/bytes/mode and
-the child's full eligible worktree snapshot are restored. New outside-target
-untracked files are removed. A successful earlier child in a batch is included
-in the next child's baseline and is preserved when a later child fails.
+the child's Git-visible snapshot of tracked/nonignored files and index entries
+are restored. New nonignored outside-target files are removed. Ignored
+dependency, cache, and build trees are outside the snapshot. A successful
+earlier child in a batch is included in the next child's baseline and is
+preserved when a later child fails.
 
 ## Environment defaults
 
@@ -110,5 +112,10 @@ there and that endpoint's privacy policy applies.
 `delegate.sh` appends valid JSON start/end events containing agent, model, mode,
 duration, exit code, status, retries, restoration state, branch, errors, and
 all six Ollama metrics. This is local operational telemetry, not a durable task
-database. Contract setup ensures `.claude/delegate-coder.log` is ignored via
-`.git/info/exclude`; it does not edit a tracked consumer ignore file.
+database. Contract setup ensures only `.claude/delegate-coder.log` is ignored
+via `.git/info/exclude`; it does not edit a tracked consumer ignore file.
+If an older delegate-coder installation left a broad `/.claude/` exclusion in
+that local file, setup removes that legacy rule before adding the narrow one.
+
+`test_command` is trusted local code. It must not mutate Git references or make
+commits; reference mutations are outside the transactional rollback guarantee.

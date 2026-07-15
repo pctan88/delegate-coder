@@ -33,7 +33,6 @@ setup_case() {
 /request.*
 /ollama.*
 /new.txt
-/.claude/
 EOF
   printf 'original\n' > "$CASE_DIR/target.txt"
   chmod 640 "$CASE_DIR/target.txt"
@@ -80,6 +79,8 @@ mode="${CURL_MODE:-good}"
 content=good
 if [[ "$mode" == outside ]]; then printf 'changed\n' > outside.txt; fi
 if [[ "$mode" == outside-new ]]; then printf 'changed\n' > new-outside.txt; fi
+if [[ "$mode" == claude-tracked ]]; then printf 'changed\n' > .claude/settings.json; fi
+if [[ "$mode" == claude-new ]]; then printf 'changed\n' > .claude/unexpected; fi
 if [[ "$mode" == retry && "$count" -eq 1 ]]; then content=bad; fi
 if [[ "$mode" == bad ]]; then content=bad; fi
 if [[ "$mode" == batch-fail && "$count" -le 2 ]]; then content=bad; fi
@@ -329,12 +330,16 @@ pass "truncation guard"
 # An oversized complete input prompt is rejected before any Ollama HTTP
 # request or target replacement.
 setup_case promptguard
+git -C "$CASE_DIR" branch -M main
 make_contract target.txt "true" "$CASE_DIR/contract.json"
 set +e
 DELEGATE_NUM_CTX=1 run_dispatch "$(cat "$CASE_DIR/contract.json")"
 status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "oversized prompt should fail"
+[[ "$(git -C "$CASE_DIR" branch --show-current)" == main || "$(git -C "$CASE_DIR" branch --show-current)" == master ]] || fail "oversized prompt must remain on the base branch"
+[[ -z "$(git -C "$CASE_DIR" branch --list 'delegate/contract-*')" ]] || fail "oversized prompt must not create a delegate branch"
+[[ ! -s "$ARTIFACT_DIR/ollama.stops" ]] || fail "oversized prompt must not evict Ollama models"
 [[ ! -s "$CURL_COUNT_FILE_PATH" ]] || fail "oversized prompt must not call Ollama"
 [[ ! -e "$ARTIFACT_DIR/request.1" ]] || fail "oversized prompt must not create a request"
 [[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "oversized prompt must not overwrite target"
@@ -522,10 +527,10 @@ pass "dispatcher config validates before branch creation"
 # A consumer repository without a .claude ignore rule gets an idempotent local
 # exclusion, and sequential contracts leave only accepted target changes.
 setup_case consumer-log
-sed -i.bak '/^\/.claude\/$/d' "$CASE_DIR/.gitignore"
-rm -f "$CASE_DIR/.gitignore.bak"
-git -C "$CASE_DIR" add .gitignore
-git -C "$CASE_DIR" commit -qm consumer-no-claude-ignore
+mkdir -p "$CASE_DIR/.claude"
+printf 'unexpected\n' > "$CASE_DIR/.claude/unexpected"
+if git -C "$CASE_DIR" check-ignore -q --no-index .claude/unexpected; then fail "only the audit log should be ignored"; fi
+rm -f "$CASE_DIR/.claude/unexpected"
 printf 'original\n' > "$CASE_DIR/second.txt"
 git -C "$CASE_DIR" add second.txt
 git -C "$CASE_DIR" commit -qm consumer-second-target
@@ -540,9 +545,50 @@ CURL_MODE=good run_dispatch "$(cat "$CASE_DIR/batch.json")" || fail "consumer se
 [[ -f "$CASE_DIR/.claude/delegate-coder.log" ]] || fail "consumer audit log should remain available"
 EXCLUDE_FILE="$(cd "$CASE_DIR" && git rev-parse --git-path info/exclude)"
 [[ "$EXCLUDE_FILE" == /* ]] || EXCLUDE_FILE="$CASE_DIR/$EXCLUDE_FILE"
-grep -Fxq '/.claude/' "$EXCLUDE_FILE" || fail "runtime log exclusion should be idempotently configured"
+grep -Fxq '/.claude/delegate-coder.log' "$EXCLUDE_FILE" || fail "runtime log exclusion should be idempotently configured"
+! grep -Fxq '/.claude/' "$EXCLUDE_FILE" || fail "the whole .claude directory must not be ignored"
 [[ "$(git -C "$CASE_DIR" status --porcelain --untracked-files=all)" == $' M second.txt\n M target.txt' ]] || fail "consumer worktree should contain only accepted target changes"
 pass "consumer audit log does not dirty worktree"
+
+# A legacy broad exclusion is narrowed during setup rather than allowing
+# .claude files to escape dirty-state and rollback detection.
+setup_case legacy-exclude
+EXCLUDE_FILE="$(cd "$CASE_DIR" && git rev-parse --git-path info/exclude)"
+[[ "$EXCLUDE_FILE" == /* ]] || EXCLUDE_FILE="$CASE_DIR/$EXCLUDE_FILE"
+mkdir -p "$(dirname "$EXCLUDE_FILE")"
+printf '/.claude/\n' >> "$EXCLUDE_FILE"
+make_contract target.txt "true" "$CASE_DIR/contract.json"
+run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "legacy exclusion migration should pass"
+grep -Fxq '/.claude/delegate-coder.log' "$EXCLUDE_FILE" || fail "legacy migration must install the narrow exclusion"
+! grep -Fxq '/.claude/' "$EXCLUDE_FILE" || fail "legacy broad exclusion must be removed"
+pass "legacy .claude exclusion migration"
+
+# Tracked Claude configuration is part of the transactional snapshot.
+setup_case claude-tracked
+mkdir -p "$CASE_DIR/.claude"
+printf 'original-settings\n' > "$CASE_DIR/.claude/settings.json"
+git -C "$CASE_DIR" add .claude/settings.json
+git -C "$CASE_DIR" commit -qm claude-settings
+make_contract target.txt "true" "$CASE_DIR/contract.json"
+set +e
+CURL_MODE=claude-tracked run_dispatch "$(cat "$CASE_DIR/contract.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "tracked .claude change must fail"
+printf 'original-settings\n' | cmp -s - "$CASE_DIR/.claude/settings.json" || fail "tracked .claude file must be restored"
+contains "$STDOUT_PATH" 'verification changed files outside target_file' "tracked .claude change error"
+pass "tracked .claude rollback"
+
+# A newly created, nonignored Claude file is outside the contract and is removed.
+setup_case claude-new
+make_contract target.txt "true" "$CASE_DIR/contract.json"
+set +e
+CURL_MODE=claude-new run_dispatch "$(cat "$CASE_DIR/contract.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "new .claude change must fail"
+[[ ! -e "$CASE_DIR/.claude/unexpected" ]] || fail "new .claude file must be removed"
+pass "new .claude rollback"
 
 # Any change outside the declared target is rejected and the target is restored.
 setup_case outside
@@ -573,6 +619,20 @@ set -e
 [[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "new outside-target failure must restore target"
 pass "untracked outside-target rollback"
 
+# A verification command that stages target and outside files must restore the
+# pre-child index as well as the worktree.
+setup_case staged-failure
+make_contract target.txt "printf 'staged-outside\n' > outside-stage.txt; git add target.txt outside-stage.txt; false" "$CASE_DIR/contract.json"
+set +e
+CURL_MODE=good run_dispatch "$(cat "$CASE_DIR/contract.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "staged outside-target failure must return nonzero"
+[[ -z "$(git -C "$CASE_DIR" diff --cached --name-only)" ]] || fail "failed contract must restore the Git index"
+[[ ! -e "$CASE_DIR/outside-stage.txt" ]] || fail "staged new outside file must be removed"
+[[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "staged failure must restore target"
+pass "staged index rollback"
+
 # Earlier accepted children remain on the isolated branch when a later child
 # fails and is restored.
 setup_case batch-later
@@ -593,8 +653,46 @@ set -e
 [[ "$status" -ne 0 ]] || fail "later failed batch child should return nonzero"
 printf 'good\n' | cmp -s - "$CASE_DIR/target.txt" || fail "earlier accepted batch target must survive"
 printf 'original\n' | cmp -s - "$CASE_DIR/second.txt" || fail "failed later batch target must be restored"
+[[ -z "$(git -C "$CASE_DIR" diff --cached --name-only)" ]] || fail "later failed batch must restore the Git index"
 contains "$STDOUT_PATH" '- Completed: 1' "later failed batch completed count"
 pass "batch rollback preserves earlier accepted child"
+
+# Earlier accepted children survive a later child that stages an outside file.
+setup_case batch-staged-later
+printf 'original\n' > "$CASE_DIR/second.txt"
+git -C "$CASE_DIR" add second.txt
+git -C "$CASE_DIR" commit -qm second
+python3 - "$CASE_DIR/batch.json" <<'PY'
+import json, sys
+json.dump([
+    {"target_file": "target.txt", "instructions": "pass", "test_command": "grep -q '^good$' target.txt"},
+    {"target_file": "second.txt", "instructions": "stage and fail", "test_command": "printf 'staged-outside\\n' > outside-stage.txt; git add second.txt outside-stage.txt; false"},
+], open(sys.argv[1], "w"))
+PY
+set +e
+CURL_MODE=good run_dispatch "$(cat "$CASE_DIR/batch.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "staged later batch child must return nonzero"
+printf 'good\n' | cmp -s - "$CASE_DIR/target.txt" || fail "earlier accepted target must survive staged failure"
+printf 'original\n' | cmp -s - "$CASE_DIR/second.txt" || fail "staged failed target must be restored"
+[[ ! -e "$CASE_DIR/outside-stage.txt" ]] || fail "staged outside file must be removed"
+[[ -z "$(git -C "$CASE_DIR" diff --cached --name-only)" ]] || fail "staged later failure must restore the Git index"
+pass "batch staged rollback preserves earlier child"
+
+# Ignored dependency trees are not copied into the transactional snapshot.
+setup_case ignored-dependencies
+printf '/node_modules/\n/.venv/\n' >> "$CASE_DIR/.gitignore"
+git -C "$CASE_DIR" add .gitignore
+git -C "$CASE_DIR" commit -qm ignored-dependencies
+mkdir -p "$CASE_DIR/node_modules/pkg" "$CASE_DIR/.venv/lib"
+printf 'dependency\n' > "$CASE_DIR/node_modules/pkg/index.js"
+printf 'venv\n' > "$CASE_DIR/.venv/lib/python.py"
+make_contract target.txt "true" "$CASE_DIR/contract.json"
+DELEGATE_SNAPSHOT_TRACE="$ARTIFACT_DIR/snapshot.paths" run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "ignored dependency contract should pass"
+! grep -Fqx 'node_modules/pkg/index.js' "$ARTIFACT_DIR/snapshot.paths" || fail "node_modules must not be snapshotted"
+! grep -Fqx '.venv/lib/python.py' "$ARTIFACT_DIR/snapshot.paths" || fail ".venv must not be snapshotted"
+pass "ignored dependency snapshot scope"
 
 # Traversal is rejected before Ollama is contacted.
 setup_case traversal

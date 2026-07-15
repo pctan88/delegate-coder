@@ -26,14 +26,15 @@
       retry count.
 - [ ] Confirm timeout and truncation failures leave the target safe.
 - [ ] Confirm malformed output, signals, modified tracked outside files, new
-      untracked outside files, and failed new-file contracts restore safely and
-      report `Restored`.
+      untracked outside files, tracked/new `.claude/*` files, staged target and
+      outside files, and failed new-file contracts restore bytes, modes, the
+      Git index, and Git-visible nonignored files safely and report `Restored`.
 - [ ] Confirm preflight rejects dirty `main`, malformed contracts, invalid later
-      batch paths, and zero numeric project settings before any
-      `delegate/contract-*` branch is created.
+      batch paths, oversized initial prompts, and zero numeric project settings
+      before any `delegate/contract-*` branch or Ollama eviction is performed.
 - [ ] Confirm `.claude/delegate-coder.log` is available to stats while the
-      idempotent `.git/info/exclude` rule keeps it out of consumer worktree
-      changes.
+      idempotent `.git/info/exclude` rule excludes only that file and keeps it
+      out of consumer worktree changes; other `.claude/*` files remain visible.
 
 ## Benchmark and rollback
 
