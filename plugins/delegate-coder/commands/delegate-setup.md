@@ -37,7 +37,12 @@ description: Guided first-time setup for the delegate-coder skill.
    - If it prints nothing (unrecognized or ambiguous), ask the user for their test command.
    - It's fine to finish with **no** test command if the project has none — just omit the key.
 
-7. Write the choices to `.claude/delegate-coder.json` (include `model` only if one was chosen; include `test_command` only if known; include the backend and contract settings when selected):
+7. Write the choices to the active project config. Prefer
+   `.delegate-coder/config.json`; if an existing
+   `.claude/delegate-coder.json` is present and the user chooses to keep the
+   legacy setup, update that file instead. Never silently maintain two files.
+   Include `model` only if one was chosen, `test_command` only if known, and
+   backend/contract settings when selected:
 ```json
 {
   "agent": "<chosen_agent>",

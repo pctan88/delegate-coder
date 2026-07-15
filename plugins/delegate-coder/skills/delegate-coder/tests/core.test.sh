@@ -111,6 +111,21 @@ run_dispatch read "understand" >/dev/null 2>&1 || fail "config-agent run failed"
 contains "$FAKE_ARGV" "--model gpt-x-mini" "model from config should reach worker argv"
 pass "agent + model resolved from config file"
 
+# Codex's neutral project config takes precedence over the legacy Claude path;
+# legacy-only projects remain supported.
+setup_case neutralcfg
+mkdir -p "$CASE_DIR/.delegate-coder" "$CASE_DIR/.claude"
+cat > "$CASE_DIR/.delegate-coder/config.json" <<'JSON'
+{ "agent": "codex", "model": "neutral-model" }
+JSON
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
+{ "agent": "codex", "model": "legacy-model" }
+JSON
+run_dispatch read "understand" >/dev/null 2>&1 || fail "neutral config run failed"
+contains "$FAKE_ARGV" "--model neutral-model" "neutral config should take precedence"
+absent "$FAKE_ARGV" "legacy-model" "legacy config must not override neutral config"
+pass "neutral config takes precedence over legacy Claude config"
+
 # The optional implementation backend preserves the normal agent default and
 # refuses non-contract input without silently falling back to a hosted worker.
 setup_case backenddefault

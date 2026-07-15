@@ -5,14 +5,14 @@
     "email": "tanpoicheong@gmail.com"
   },
   "metadata": {
-    "description": "Tan's personal Claude Code tools — currently the delegate-coder plugin for offloading execution-heavy coding work to a cheaper worker agent."
+    "description": "Tan's Claude Code and Codex tools — currently the delegate-coder plugin for offloading execution-heavy coding work to a cheaper worker agent."
   },
   "plugins": [
     {
       "name": "delegate-coder",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "source": "./plugins/delegate-coder",
-      "description": "Delegate execution-heavy coding work (bulk reading, implementation, refactoring, first-pass review) to a cheaper CLI worker agent to save Claude usage."
+      "description": "Delegate execution-heavy coding work from Claude Code or Codex to a cheaper CLI worker agent with confirmed Qwen/Ollama onboarding."
     }
   ]
 }

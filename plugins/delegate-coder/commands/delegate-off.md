@@ -5,4 +5,8 @@ description: Disables the delegate-coder skill for this project.
 
 # Disable Delegate Coder
 
-Set `"enabled": false` in `.claude/delegate-coder.json` using the `jq` command line tool or `python3`. If the file doesn't exist, create it with `{"enabled": false}`. Inform the user that the skill is now disabled.
+Select the active config: prefer `.delegate-coder/config.json`; use an
+existing `.claude/delegate-coder.json` only when the user explicitly keeps the
+legacy Claude setup. Set `"enabled": false` there using `jq` or `python3`. If
+no config exists, create the neutral path with `{"enabled": false}`. Inform
+the user which path was updated.

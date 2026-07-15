@@ -23,7 +23,8 @@ delegated code path stays byte-identical to the published benchmark.
 | `scripts/stats.sh` | Summarize the JSON audit log (needs `jq`) |
 | `commands/delegate-*.md` | Slash commands that write config or read the log; never on the delegated path |
 | `references/{adapters,setup,models}.md` | Per-agent commands, config/permission setup, model options |
-| `.claude/delegate-coder.json` | Per-project config (agent, model, scope, fallback, allow_paths, overrides) |
+| `.delegate-coder/config.json` | Preferred shared per-project config (agent, model, scope, fallback, allow_paths, overrides) |
+| `.claude/delegate-coder.json` | Legacy Claude config fallback |
 | `.claude/delegate-coder.log` | JSON audit events for `stats.sh` |
 | `benchmark/` | Paired A/B harness and the frozen v1 dataset |
 

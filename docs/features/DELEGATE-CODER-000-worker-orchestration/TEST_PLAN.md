@@ -19,7 +19,7 @@ It must cover:
 | Missing task spec | Exit 2 |
 | No agent configured | Exit 3, lists installed candidates |
 | Agent from `DELEGATE_AGENT` | Adapter runs with the resolved agent |
-| Agent from config `agent` field | Same resolution from `.claude/delegate-coder.json` |
+| Agent from config `agent` field | Same resolution from `.delegate-coder/config.json`, then legacy `.claude/delegate-coder.json` |
 | `read` vs `exec` mapping | Adapter-specific read-only/dry-run controls where supported; change-making flags for `exec` |
 | Model threading | Configured `model` appears in the worker argv |
 | `command_override` | Override runs with `{task}` substituted, bypassing the adapter |

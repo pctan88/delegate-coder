@@ -63,8 +63,13 @@ In Codex, run `/plugins`, choose **Tan Tools**, and install **Delegate Coder**.
 Then start a new task and invoke the skill with `$delegate-coder` or by asking
 Codex to delegate a bounded implementation, refactor, repository read, or
 first-pass review to a configured worker. Claude's `/delegate-*` command files
-remain available in Claude Code; Codex uses the skill and its natural-language
-workflow instead.
+remain available in Claude Code; Codex uses skills and its natural-language
+workflow instead. On first use, invoke `$delegate-coder-codex-onboarding` (or
+ask Codex to set up Delegate Coder). It detects `qwen`, Ollama models, and the
+project test command, explains the Qwen Code CLI versus local Ollama contract
+choice, asks for confirmation, and then creates the shared
+`.delegate-coder/config.json`. It never writes configuration or installs a
+worker without your confirmation.
 
 For a skill-only installation (without the plugin browser), use the existing
 installer with Codex's skill directory:
@@ -74,11 +79,12 @@ curl -fsSL https://raw.githubusercontent.com/pctan88/delegate-coder/main/install
   | bash -s -- --target "$HOME/.agents/skills"
 ```
 
-The runtime configuration is still read from
-`.claude/delegate-coder.json` so the same project setup works from Claude Code
-and Codex. Local Ollama/Qwen is selected through the existing worker-agent
-configuration; keep planning, architecture, security-sensitive decisions, and
-final diff/test acceptance in the orchestrator.
+The runtime prefers the shared `.delegate-coder/config.json` and falls back to
+the legacy `.claude/delegate-coder.json`, so existing Claude Code projects keep
+working unchanged. Local Ollama/Qwen is selected through the onboarding flow or
+the `implementation_backend: "contract"` configuration; keep planning,
+architecture, security-sensitive decisions, and final diff/test acceptance in
+the orchestrator.
 
 ### Manual (skill only)
 
@@ -104,7 +110,9 @@ curl -fsSL https://raw.githubusercontent.com/pctan88/delegate-coder/main/install
    > "Use the delegate worker to summarize the architecture of this repo"
    
    or just work normally — the skill triggers when delegation fits the task.
-3. First run, Claude detects installed workers, asks which to use, and saves the choice to `.claude/delegate-coder.json`.
+3. First run, the orchestrator detects installed workers, asks which to use,
+   and saves the choice to `.delegate-coder/config.json` (existing Claude
+   projects may continue using `.claude/delegate-coder.json`).
 
 Configuration details: [setup.md](plugins/delegate-coder/skills/delegate-coder/references/setup.md)
 
