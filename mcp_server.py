@@ -17,16 +17,26 @@ DOCTOR_SH = ROOT_DIR / "plugins" / "delegate-coder" / "skills" / "delegate-coder
 
 def run_command(args, cwd=None):
     try:
-        # Run with the same environment variables inherited
         env = os.environ.copy()
+        # Default to the process's active CWD (which matches the client's active project workspace)
+        target_cwd = cwd if cwd is not None else os.getcwd()
+        if cwd is not None:
+            p = pathlib.Path(cwd).resolve(strict=True)
+            if not p.is_dir():
+                raise NotADirectoryError(f"project_root is not a directory: {cwd}")
+            target_cwd = str(p)
+
         res = subprocess.run(
             args,
             capture_output=True,
             text=True,
-            cwd=cwd or str(ROOT_DIR),
-            env=env
+            cwd=target_cwd,
+            env=env,
+            timeout=1200  # 20-minute execution timeout to prevent hung loops
         )
         return res.returncode, res.stdout, res.stderr
+    except subprocess.TimeoutExpired:
+        return 124, "", "mcp_server: command execution timed out (20-minute limit exceeded)"
     except Exception as e:
         return 1, "", str(e)
 
@@ -39,11 +49,13 @@ def handle_request(req):
     params = req.get("params", {})
     
     if method == "initialize":
+        # Echo back the protocolVersion requested by the client, falling back to stable spec
+        client_version = params.get("protocolVersion", "2024-11-05")
         return {
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": client_version,
                 "capabilities": {
                     "tools": {}
                 },
@@ -82,6 +94,10 @@ def handle_request(req):
                                     "type": "array",
                                     "items": {"type": "string"},
                                     "description": "Optional list of read-only reference context files to help the worker agent"
+                                },
+                                "project_root": {
+                                    "type": "string",
+                                    "description": "Optional absolute path to the project root directory. Defaults to client current directory."
                                 }
                             },
                             "required": ["target_file", "instructions", "test_command"]
@@ -96,6 +112,10 @@ def handle_request(req):
                                 "task": {
                                     "type": "string",
                                     "description": "The task specification / execution prompt"
+                                },
+                                "project_root": {
+                                    "type": "string",
+                                    "description": "Optional absolute path to the project root directory. Defaults to client current directory."
                                 }
                             },
                             "required": ["task"]
@@ -110,6 +130,10 @@ def handle_request(req):
                                 "task": {
                                     "type": "string",
                                     "description": "The read/analysis query"
+                                },
+                                "project_root": {
+                                    "type": "string",
+                                    "description": "Optional absolute path to the project root directory. Defaults to client current directory."
                                 }
                             },
                             "required": ["task"]
@@ -124,6 +148,10 @@ def handle_request(req):
                                 "all": {
                                     "type": "boolean",
                                     "description": "If true, checks all known agents instead of just the configured one"
+                                },
+                                "project_root": {
+                                    "type": "string",
+                                    "description": "Optional absolute path to the project root directory. Defaults to client current directory."
                                 }
                             }
                         }
@@ -135,6 +163,7 @@ def handle_request(req):
     elif method == "tools/call":
         name = params.get("name")
         args = params.get("arguments", {})
+        project_root = args.get("project_root")
         
         if name == "delegate_contract":
             target_file = args.get("target_file")
@@ -142,6 +171,17 @@ def handle_request(req):
             test_command = args.get("test_command")
             context_files = args.get("context_files")
             
+            # Server-side argument validation
+            if not target_file or not instructions or not test_command:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {
+                        "code": -32602,
+                        "message": "Invalid params: target_file, instructions, and test_command are required"
+                    }
+                }
+
             contract_obj = {
                 "target_file": target_file,
                 "instructions": instructions,
@@ -152,7 +192,7 @@ def handle_request(req):
                 
             contract_str = json.dumps(contract_obj)
             
-            rc, stdout, stderr = run_command(["bash", str(DELEGATE_SH), "contract", contract_str])
+            rc, stdout, stderr = run_command(["bash", str(DELEGATE_SH), "contract", contract_str], cwd=project_root)
             
             text = f"Exit code: {rc}\n\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
             return {
@@ -166,7 +206,16 @@ def handle_request(req):
             
         elif name == "delegate_exec":
             task = args.get("task")
-            rc, stdout, stderr = run_command(["bash", str(DELEGATE_SH), "exec", task])
+            if not task:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {
+                        "code": -32602,
+                        "message": "Invalid params: task is required"
+                    }
+                }
+            rc, stdout, stderr = run_command(["bash", str(DELEGATE_SH), "exec", task], cwd=project_root)
             text = f"Exit code: {rc}\n\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
             return {
                 "jsonrpc": "2.0",
@@ -179,7 +228,16 @@ def handle_request(req):
             
         elif name == "delegate_read":
             task = args.get("task")
-            rc, stdout, stderr = run_command(["bash", str(DELEGATE_SH), "read", task])
+            if not task:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {
+                        "code": -32602,
+                        "message": "Invalid params: task is required"
+                    }
+                }
+            rc, stdout, stderr = run_command(["bash", str(DELEGATE_SH), "read", task], cwd=project_root)
             text = f"Exit code: {rc}\n\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
             return {
                 "jsonrpc": "2.0",
@@ -195,7 +253,7 @@ def handle_request(req):
             cmd = ["bash", str(DOCTOR_SH)]
             if check_all:
                 cmd.append("--all")
-            rc, stdout, stderr = run_command(cmd)
+            rc, stdout, stderr = run_command(cmd, cwd=project_root)
             text = f"Exit code: {rc}\n\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
             return {
                 "jsonrpc": "2.0",
