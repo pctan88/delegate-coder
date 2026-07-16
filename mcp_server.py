@@ -364,6 +364,15 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8")
+        try:
+            req = json.loads(body)
+        except Exception:
+            self.send_response(400)
+            self.end_headers()
+            return
+
         if parsed.path == "/message":
             query = urllib.parse.parse_qs(parsed.query)
             client_id = query.get("client_id", [None])[0]
@@ -372,27 +381,15 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
 
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length).decode("utf-8")
-            try:
-                req = json.loads(body)
-            except Exception:
-                self.send_response(400)
-                self.end_headers()
-                return
-
-            resp = handle_request(req)
-            if resp is not None:
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(json.dumps(resp).encode("utf-8"))
-            else:
-                self.send_response(202)
-                self.end_headers()
+        resp = handle_request(req)
+        if resp is not None:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
         else:
-            self.send_response(404)
+            self.send_response(202)
             self.end_headers()
 
 def run_sse_server(port):
