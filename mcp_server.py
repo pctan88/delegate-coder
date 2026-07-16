@@ -368,6 +368,9 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode("utf-8")
+        sys.stderr.write(f"mcp_server [SSE]: POST {self.path} body: {body}\n")
+        sys.stderr.flush()
+
         try:
             req = json.loads(body)
         except Exception:
@@ -389,10 +392,15 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            self.wfile.write(json.dumps(resp).encode("utf-8"))
+            resp_str = json.dumps(resp)
+            self.wfile.write(resp_str.encode("utf-8"))
+            sys.stderr.write(f"mcp_server [SSE]: Response: {resp_str}\n")
+            sys.stderr.flush()
         else:
             self.send_response(202)
             self.end_headers()
+            sys.stderr.write("mcp_server [SSE]: Response: 202 Accepted\n")
+            sys.stderr.flush()
 
 def run_sse_server(port):
     sys.stderr.write(f"mcp_server [SSE]: Starting HTTP/SSE server on port {port}...\n")
