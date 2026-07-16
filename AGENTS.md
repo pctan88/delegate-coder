@@ -22,6 +22,8 @@ changes.
 
 Keep work bounded and reviewable:
 
+- **Never push directly to the `main` branch** under any circumstances; all changes must go through feature branches and pull requests.
+- **Any remote push requires explicit user approval** (never push in the background or force-push without confirmation).
 - One contract-router contract targets one file. A multi-file change is split
   into sequential contracts or handled as an explicitly reviewed chat-agent
   task.
