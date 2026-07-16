@@ -303,6 +303,8 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 class MCPSSEHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def log_message(self, format, *args):
         # Redirect request logs to stderr to keep stdout completely clean for JSON-RPC
         sys.stderr.write(f"mcp_server [SSE]: {format % args}\n")
