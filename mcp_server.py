@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""mcp_server.py — Stdio-based Model Context Protocol (MCP) server for delegate-coder.
+
+Allows any MCP client (such as Antigravity or Claude Code) to delegate
+execution-heavy tasks or run Task Contracts using local worker agents.
+"""
+import sys
+import json
+import subprocess
+import os
+import pathlib
+
+# Setup absolute paths relative to repository root
+ROOT_DIR = pathlib.Path(__file__).parent.resolve()
+DELEGATE_SH = ROOT_DIR / "plugins" / "delegate-coder" / "skills" / "delegate-coder" / "scripts" / "delegate.sh"
+DOCTOR_SH = ROOT_DIR / "plugins" / "delegate-coder" / "skills" / "delegate-coder" / "scripts" / "doctor.sh"
+
+SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05"]
+
+def run_command(args, cwd=None):
+    try:
+        env = os.environ.copy()
+        # Default to the process's active CWD (which matches the client's active project workspace)
+        target_cwd = cwd if cwd is not None else os.getcwd()
+        if cwd is not None:
+            p = pathlib.Path(cwd).resolve(strict=True)
+            if not p.is_dir():
+                raise NotADirectoryError(f"project_root is not a directory: {cwd}")
+            target_cwd = str(p)
+
+        res = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            cwd=target_cwd,
+            env=env,
+            timeout=1200  # 20-minute execution timeout to prevent hung loops
+        )
+        return res.returncode, res.stdout, res.stderr
+    except subprocess.TimeoutExpired:
+        return 124, "", "mcp_server: command execution timed out (20-minute limit exceeded)"
+    except Exception as e:
+        return 1, "", str(e)
+
+def handle_request(req):
+    if not isinstance(req, dict) or "method" not in req:
+        return {"jsonrpc": "2.0", "error": {"code": -32600, "message": "Invalid request"}}
+    
+    method = req.get("method")
+    req_id = req.get("id")
+    params = req.get("params", {})
+    
+    if method == "initialize":
+        requested_version = params.get("protocolVersion")
+        if requested_version in SUPPORTED_PROTOCOL_VERSIONS:
+            negotiated_version = requested_version
+        else:
+            negotiated_version = SUPPORTED_PROTOCOL_VERSIONS[-1]
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "protocolVersion": negotiated_version,
+                "capabilities": {
+                    "tools": {}
+                },
+                "serverInfo": {
+                    "name": "delegate-coder-mcp",
+                    "version": "0.1.0"
+                }
+            }
+        }
+        
+    elif method == "tools/list":
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "tools": [
+                    {
+                        "name": "delegate_contract",
+                        "description": "Delegate a bounded implementation/refactoring task using a single-file Task Contract. Restores target file and Git index on failure.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "target_file": {
+                                    "type": "string",
+                                    "description": "The target file path relative to repository root to modify (e.g. 'src/utils.py')"
+                                },
+                                "instructions": {
+                                    "type": "string",
+                                    "description": "The objective modification instructions"
+                                },
+                                "test_command": {
+                                    "type": "string",
+                                    "description": "The objective command to run to verify the changes"
+                                },
+                                "context_files": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "Optional list of read-only reference context files to help the worker agent"
+                                },
+                                "project_root": {
+                                    "type": "string",
+                                    "description": "Optional absolute path to the project root directory. Defaults to client current directory."
+                                }
+                            },
+                            "required": ["target_file", "instructions", "test_command"]
+                        }
+                    },
+                    {
+                        "name": "delegate_exec",
+                        "description": "Run a general implementation task using the configured worker agent (requires DELEGATE_AGENT or config).",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "task": {
+                                    "type": "string",
+                                    "description": "The task specification / execution prompt"
+                                },
+                                "project_root": {
+                                    "type": "string",
+                                    "description": "Optional absolute path to the project root directory. Defaults to client current directory."
+                                }
+                            },
+                            "required": ["task"]
+                        }
+                    },
+                    {
+                        "name": "delegate_read",
+                        "description": "Run a codebase reading or analysis task using the configured worker agent (read-only mode).",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "task": {
+                                    "type": "string",
+                                    "description": "The read/analysis query"
+                                },
+                                "project_root": {
+                                    "type": "string",
+                                    "description": "Optional absolute path to the project root directory. Defaults to client current directory."
+                                }
+                            },
+                            "required": ["task"]
+                        }
+                    },
+                    {
+                        "name": "delegate_doctor",
+                        "description": "Run the health-check doctor tool to verify installed worker agents and credentials.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "all": {
+                                    "type": "boolean",
+                                    "description": "If true, checks all known agents instead of just the configured one"
+                                },
+                                "project_root": {
+                                    "type": "string",
+                                    "description": "Optional absolute path to the project root directory. Defaults to client current directory."
+                                }
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+        
+    elif method == "tools/call":
+        name = params.get("name")
+        args = params.get("arguments", {})
+        project_root = args.get("project_root")
+        
+        if project_root is not None and not pathlib.Path(project_root).is_dir():
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {
+                    "code": -32602,
+                    "message": f"Invalid params: project_root does not exist or is not a directory: {project_root}"
+                }
+            }
+
+        if name == "delegate_contract":
+            target_file = args.get("target_file")
+            instructions = args.get("instructions")
+            test_command = args.get("test_command")
+            context_files = args.get("context_files")
+            
+            # Server-side argument validation
+            if not target_file or not instructions or not test_command:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {
+                        "code": -32602,
+                        "message": "Invalid params: target_file, instructions, and test_command are required"
+                    }
+                }
+
+            contract_obj = {
+                "target_file": target_file,
+                "instructions": instructions,
+                "test_command": test_command
+            }
+            if context_files is not None:
+                contract_obj["context_files"] = context_files
+                
+            contract_str = json.dumps(contract_obj)
+            
+            rc, stdout, stderr = run_command(["bash", str(DELEGATE_SH), "contract", contract_str], cwd=project_root)
+            
+            text = f"Exit code: {rc}\n\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [{"type": "text", "text": text}],
+                    "isError": rc != 0
+                }
+            }
+            
+        elif name == "delegate_exec":
+            task = args.get("task")
+            if not task:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {
+                        "code": -32602,
+                        "message": "Invalid params: task is required"
+                    }
+                }
+            rc, stdout, stderr = run_command(["bash", str(DELEGATE_SH), "exec", task], cwd=project_root)
+            text = f"Exit code: {rc}\n\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [{"type": "text", "text": text}],
+                    "isError": rc != 0
+                }
+            }
+            
+        elif name == "delegate_read":
+            task = args.get("task")
+            if not task:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {
+                        "code": -32602,
+                        "message": "Invalid params: task is required"
+                    }
+                }
+            rc, stdout, stderr = run_command(["bash", str(DELEGATE_SH), "read", task], cwd=project_root)
+            text = f"Exit code: {rc}\n\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [{"type": "text", "text": text}],
+                    "isError": rc != 0
+                }
+            }
+            
+        elif name == "delegate_doctor":
+            check_all = args.get("all", False)
+            cmd = ["bash", str(DOCTOR_SH)]
+            if check_all:
+                cmd.append("--all")
+            rc, stdout, stderr = run_command(cmd, cwd=project_root)
+            text = f"Exit code: {rc}\n\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [{"type": "text", "text": text}],
+                    "isError": rc != 0
+                }
+            }
+            
+        else:
+            return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Unknown tool: {name}"}}
+            
+    else:
+        # Handshake notifications or initialize notifications do not expect replies
+        if req_id is not None:
+            return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+        return None
+
+def main():
+    sys.stderr.write("delegate-coder-mcp started\n")
+    sys.stderr.flush()
+    while True:
+        try:
+            line = sys.stdin.readline()
+            if not line:
+                break
+            req = json.loads(line)
+            resp = handle_request(req)
+            if resp is not None:
+                sys.stdout.write(json.dumps(resp) + "\n")
+                sys.stdout.flush()
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            sys.stderr.write(f"Error handling request: {e}\n")
+            sys.stderr.flush()
+
+if __name__ == "__main__":
+    main()

@@ -79,6 +79,29 @@ curl -fsSL https://raw.githubusercontent.com/pctan88/delegate-coder/main/install
   | bash -s -- --target "$HOME/.agents/skills"
 ```
 
+### As an MCP Server (Antigravity, Cursor, Cline, Claude Code, etc.)
+
+This repository exposes a standard Model Context Protocol (MCP) stdio wrapper (`mcp_server.py`) at the root. You can configure any MCP client to run it:
+
+**Example Client Configuration (`mcp_config.json`):**
+```json
+{
+  "mcpServers": {
+    "delegate-coder": {
+      "command": "python3",
+      "args": ["/Users/pctan/Cowork/Workspace/AI/delegate-coder/mcp_server.py"]
+    }
+  }
+}
+```
+
+**Exposed Tools:**
+- `delegate_contract`: Run a single-file Task Contract using a local Ollama model (supporting syntax preflight, transactional rollback, and auto-retry).
+- `delegate_exec`: Route general execution/implementation tasks to the configured secondary worker CLI (e.g., `mimo`, `aider`, `gemini`, `qwen`, `opencode`).
+- `delegate_read`: Route read-only codebase analysis queries to the configured worker CLI.
+- `delegate_doctor`: Verify installed workers and their API keys/configurations.
+
+
 The runtime prefers the shared `.delegate-coder/config.json` and falls back to
 the legacy `.claude/delegate-coder.json`, so existing Claude Code projects keep
 working unchanged. Local Ollama/Qwen is selected through the onboarding flow or
