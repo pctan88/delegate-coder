@@ -9,6 +9,13 @@ import json
 import subprocess
 import os
 import pathlib
+import argparse
+import urllib.parse
+import uuid
+import queue
+import socketserver
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Setup absolute paths relative to repository root
 ROOT_DIR = pathlib.Path(__file__).parent.resolve()
@@ -281,31 +288,151 @@ def handle_request(req):
             
         else:
             return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Unknown tool: {name}"}}
-            
+
     else:
         # Handshake notifications or initialize notifications do not expect replies
         if req_id is not None:
             return {"jsonrpc": "2.0", "id": req_id, "result": {}}
         return None
 
-def main():
-    sys.stderr.write("delegate-coder-mcp started\n")
-    sys.stderr.flush()
-    while True:
-        try:
-            line = sys.stdin.readline()
-            if not line:
-                break
-            req = json.loads(line)
+# --- HTTP/SSE server implementation ---
+CLIENTS = {}
+CLIENTS_LOCK = threading.Lock()
+
+class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
+class MCPSSEHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Redirect request logs to stderr to keep stdout completely clean for JSON-RPC
+        sys.stderr.write(f"mcp_server [SSE]: {format % args}\n")
+        sys.stderr.flush()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.end_headers()
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/sse":
+            client_id = str(uuid.uuid4())
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+            # Client must POST client messages to /message?client_id=client_id
+            msg = f"event: endpoint\ndata: /message?client_id={client_id}\n\n"
+            self.wfile.write(msg.encode("utf-8"))
+            self.wfile.flush()
+
+            q = queue.Queue()
+            with CLIENTS_LOCK:
+                CLIENTS[client_id] = q
+
+            sys.stderr.write(f"mcp_server [SSE]: Client connected: {client_id}\n")
+            sys.stderr.flush()
+
+            try:
+                while True:
+                    try:
+                        data = q.get(timeout=2.0)
+                        if data is None:
+                            break
+                        msg = f"event: message\ndata: {json.dumps(data)}\n\n"
+                        self.wfile.write(msg.encode("utf-8"))
+                        self.wfile.flush()
+                    except queue.Empty:
+                        self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+            except Exception as e:
+                sys.stderr.write(f"mcp_server [SSE]: Error sending event to {client_id}: {e}\n")
+                sys.stderr.flush()
+            finally:
+                with CLIENTS_LOCK:
+                    CLIENTS.pop(client_id, None)
+                sys.stderr.write(f"mcp_server [SSE]: Client disconnected: {client_id}\n")
+                sys.stderr.flush()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/message":
+            query = urllib.parse.parse_qs(parsed.query)
+            client_id = query.get("client_id", [None])[0]
+            if not client_id:
+                self.send_response(400)
+                self.end_headers()
+                return
+
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8")
+            try:
+                req = json.loads(body)
+            except Exception:
+                self.send_response(400)
+                self.end_headers()
+                return
+
             resp = handle_request(req)
             if resp is not None:
-                sys.stdout.write(json.dumps(resp) + "\n")
-                sys.stdout.flush()
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            sys.stderr.write(f"Error handling request: {e}\n")
-            sys.stderr.flush()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps(resp).encode("utf-8"))
+            else:
+                self.send_response(202)
+                self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+def run_sse_server(port):
+    sys.stderr.write(f"mcp_server [SSE]: Starting HTTP/SSE server on port {port}...\n")
+    sys.stderr.flush()
+    server = ThreadingHTTPServer(("127.0.0.1", port), MCPSSEHandler)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        sys.stderr.write("mcp_server [SSE]: Server stopped.\n")
+        sys.stderr.flush()
+
+def main():
+    parser = argparse.ArgumentParser(description="delegate-coder MCP Server")
+    parser.add_argument("--port", type=int, help="Run as an HTTP/SSE server on the specified port instead of stdio")
+    args_parsed = parser.parse_args()
+
+    if args_parsed.port:
+        run_sse_server(args_parsed.port)
+    else:
+        sys.stderr.write("delegate-coder-mcp started in stdio mode\n")
+        sys.stderr.flush()
+        while True:
+            try:
+                line = sys.stdin.readline()
+                if not line:
+                    break
+                req = json.loads(line)
+                resp = handle_request(req)
+                if resp is not None:
+                    sys.stdout.write(json.dumps(resp) + "\n")
+                    sys.stdout.flush()
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                sys.stderr.write(f"Error handling request: {e}\n")
+                sys.stderr.flush()
 
 if __name__ == "__main__":
     main()
