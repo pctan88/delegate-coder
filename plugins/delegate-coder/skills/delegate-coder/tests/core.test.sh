@@ -234,11 +234,22 @@ d="$(mk dt_npm_ph)"; printf '{ "scripts": { "test": "echo \\"Error: no test spec
 pass "detect-test: npm placeholder ignored"
 
 d="$(mk dt_py)";    : > "$d/pytest.ini"
-# Phase 1: Smart Test Verification (pytest or unittest fallback)
-if command -v pytest >/dev/null 2>&1; then
-  [[ "$(dt "$d")" == "python3 -m pytest -q" ]] || fail "pytest.ini -> pytest"
-else
-  [[ "$(dt "$d")" == "python3 -m unittest discover" ]] || fail "pytest.ini -> unittest fallback"
+# Phase 1: Smart Test Verification (pytest or unittest fallback).
+# Resolve the interpreter detect-test.sh would use (same lookup order: venv → python → python3).
+_py_interp=""
+if [[ -x "$d/.venv/bin/python" ]]; then _py_interp="$d/.venv/bin/python"
+elif [[ -x "$d/venv/bin/python" ]]; then _py_interp="$d/venv/bin/python"
+elif command -v python >/dev/null 2>&1; then _py_interp="python"
+elif command -v python3 >/dev/null 2>&1; then _py_interp="python3"
+fi
+if [[ -n "$_py_interp" ]]; then
+  _quoted_py="$(printf '%q' "$_py_interp")"
+  # Gate on importability, matching the implementation (not command -v pytest).
+  if "$_py_interp" -c "import pytest" >/dev/null 2>&1; then
+    [[ "$(dt "$d")" == "$_quoted_py -m pytest -q" ]] || fail "pytest.ini -> pytest (interpreter: $_quoted_py)"
+  else
+    [[ "$(dt "$d")" == "$_quoted_py -m unittest discover" ]] || fail "pytest.ini -> unittest fallback (interpreter: $_quoted_py)"
+  fi
 fi
 pass "detect-test: pytest"
 

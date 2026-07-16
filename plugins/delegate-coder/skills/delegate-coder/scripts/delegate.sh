@@ -152,40 +152,40 @@ except json.JSONDecodeError:
     import re
     match = re.search(r'"target_file"\s*:\s*"([^\"]*)"', raw)
     if not match:
-        raise ValueError("invalid contract target_file")
+        raise SystemExit("delegate: invalid contract target_file")
     items = [{"target_file": match.group(1)}]
 
 for index, item in enumerate(items, 1):
     target = item.get("target_file")
     if not isinstance(target, str) or not target:
-        raise ValueError(f"contract {index}: target_file must be a non-empty string")
+        raise SystemExit(f"delegate: contract {index}: target_file must be a non-empty string")
     pure = PurePosixPath(target)
     if pure.is_absolute() or target.startswith("~/") or ".." in pure.parts:
-        raise ValueError(f"target_file resolves outside the repository: {target}")
+        raise SystemExit(f"delegate: target_file resolves outside the repository: {target}")
     target_path = root / pathlib.Path(target)
     parent = target_path.parent
     try:
         parent_real = parent.resolve(strict=True)
     except FileNotFoundError:
-        raise ValueError(f"target directory does not exist: {parent.relative_to(root)}")
+        raise SystemExit(f"delegate: target directory does not exist: {parent.relative_to(root)}")
     if parent_real != root and root not in parent_real.parents:
-        raise ValueError(f"target_file resolves outside the repository: {target}")
+        raise SystemExit(f"delegate: target_file resolves outside the repository: {target}")
     if target_path.is_symlink():
-        raise ValueError(f"target_file must not be a symlink: {target}")
+        raise SystemExit(f"delegate: target_file must not be a symlink: {target}")
     if target_path.exists() and not target_path.is_file():
-        raise ValueError(f"target_file must be a regular file: {target}")
+        raise SystemExit(f"delegate: target_file must be a regular file: {target}")
     status = subprocess.check_output(
         ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all", "--", target],
         text=True,
     )
     if status:
-        raise ValueError(f"target_file is dirty; commit or stash it before contract execution: {target}")
+        raise SystemExit(f"delegate: target_file is dirty; commit or stash it before contract execution: {target}")
 
     # Phase 2: context_files — validated via shared lib/validate_context_files.py
     context_files = item.get("context_files") or []
     if not isinstance(context_files, list):
-        raise ValueError(f"contract {index}: context_files must be a JSON array")
-    validate_context_files(context_files, root, label=f"contract {index}")
+        raise SystemExit(f"delegate: contract {index}: context_files must be a JSON array")
+    validate_context_files(context_files, root, label=f"delegate contract {index}")
 PY
 }
 
