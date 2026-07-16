@@ -43,5 +43,5 @@ for t in list_res.get("result", {}).get("tools", []):
 print()
 
 print("--- Testing tools/call (delegate_doctor) ---")
-doctor_res = send_post("tools/call", {"name": "delegate_doctor", "arguments": {"all": false}}, 3)
+doctor_res = send_post("tools/call", {"name": "delegate_doctor", "arguments": {"all": False}}, 3)
 print(json.dumps(doctor_res, indent=2))
