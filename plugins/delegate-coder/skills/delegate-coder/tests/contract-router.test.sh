@@ -993,4 +993,38 @@ git -C "$CASE_DIR" commit -qm add-nested-py
 contains "$STDERR_PATH" ".venv/bin/python" "expected nested-cwd to use absolute .venv python interpreter"
 pass "nested-cwd python resolution"
 
+# Phase 2: linked worktree check (including nested CWD)
+setup_case linked_worktree
+git -C "$CASE_DIR" worktree add "$TEST_ROOT/linked-worktree" -b linked-branch
+mkdir -p "$TEST_ROOT/linked-worktree/nested/dir"
+printf 'original_code\n' > "$TEST_ROOT/linked-worktree/nested/dir/target.py"
+git -C "$TEST_ROOT/linked-worktree" add nested/dir/target.py
+git -C "$TEST_ROOT/linked-worktree" commit -qm add-nested-py
+
+(
+  cd "$TEST_ROOT/linked-worktree/nested/dir" || exit 1
+  context_json='{"target_file": "nested/dir/target.py", "instructions": "update target", "test_command": "true"}'
+  PATH="$CASE_DIR/bin:$PATH" \
+  OLLAMA_PS_FILE="/dev/null" \
+  OLLAMA_STOP_LOG="/dev/null" \
+  CURL_COUNT_FILE="$CURL_COUNT_FILE_PATH" \
+  CURL_REQUEST_PREFIX="$ARTIFACT_DIR/request." \
+  CURL_ENV_FILE="$ARTIFACT_DIR/curl.env" \
+  CURL_ARGS_FILE="$ARTIFACT_DIR/curl.args" \
+  CURL_ORDER_FILE="$ARTIFACT_DIR/curl.order" \
+  OLLAMA_HOST="http://127.0.0.1:11434" \
+  CURL_MODE="good" \
+  DELEGATE_MODEL="qwen3-coder:30b" \
+  DELEGATE_NUM_CTX="32768" \
+  DELEGATE_KEEP_ALIVE="30m" \
+  DELEGATE_TEST_TIMEOUT="300" \
+  bash "$DISPATCH" contract "$context_json" > "$STDOUT_PATH" 2> "$STDERR_PATH"
+) || fail "linked-worktree contract should run"
+
+# Verify .claude/delegate-coder.log is ignored and worktree is clean
+git -C "$TEST_ROOT/linked-worktree" checkout -- nested/dir/target.py
+dirty="$(git -C "$TEST_ROOT/linked-worktree" status --porcelain --untracked-files=all)"
+[[ -z "$dirty" ]] || fail "linked-worktree should be clean after successful contract run, but got: $dirty"
+pass "linked-worktree support with nested CWD"
+
 echo "All contract-router tests passed."

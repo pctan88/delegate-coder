@@ -261,9 +261,13 @@ resolve_contract_settings() {
 }
 
 ensure_runtime_log_ignored() {
-  local root="$1" git_dir exclude migration_status
-  git_dir="$(git -C "$root" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
-  exclude="$git_dir/info/exclude"
+  local root="$1" rel_exclude exclude migration_status
+  rel_exclude="$(git -C "$root" rev-parse --git-path info/exclude 2>/dev/null)" || return 1
+  if [[ "$rel_exclude" == /* ]]; then
+    exclude="$rel_exclude"
+  else
+    exclude="$root/$rel_exclude"
+  fi
   mkdir -p "$(dirname "$exclude")" || return 1
   touch "$exclude" || return 1
   python3 - "$exclude" <<'PY'
