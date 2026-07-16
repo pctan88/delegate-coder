@@ -110,12 +110,16 @@ requests = [json.loads(line) for line in pathlib.Path(sys.argv[2]).read_text().s
 assert len(requests) == 17, len(requests)  # two warmups plus fifteen measured requests
 measured = [request for request in requests if request.get("prompt", "").startswith("Target file:")]
 assert len(measured) == 15, [(r.get("model"), r.get("prompt", "")[:30]) for r in requests]
-first = measured[0]
-for request in measured:
+first_direct = measured[0]
+first_contract = measured[5]
+for idx, request in enumerate(measured):
     assert request["model"] == "test-qwen"
-    assert request["system"] == first["system"]
-    assert request["options"] == first["options"], (request["options"], first["options"])
-    assert request["prompt"] == first["prompt"], (request["prompt"], first["prompt"])
+    assert request["system"] == first_direct["system"]
+    if idx < 5:
+        assert request["options"] == first_direct["options"], (request["options"], first_direct["options"])
+    else:
+        assert request["options"] == first_contract["options"], (request["options"], first_contract["options"])
+    assert request["prompt"] == first_direct["prompt"], (request["prompt"], first_direct["prompt"])
     assert request["prompt"].startswith("Target file: target.txt\n")
     assert "/target.txt" not in request["prompt"]
 PY
