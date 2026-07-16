@@ -776,10 +776,10 @@ restore_target() {
 }
 
 find_project_interpreter() {
-  if [[ -x ".venv/bin/python" ]]; then
-    echo ".venv/bin/python"
-  elif [[ -x "venv/bin/python" ]]; then
-    echo "venv/bin/python"
+  if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
+    echo "$ROOT_DIR/.venv/bin/python"
+  elif [[ -x "$ROOT_DIR/venv/bin/python" ]]; then
+    echo "$ROOT_DIR/venv/bin/python"
   elif command -v python >/dev/null 2>&1; then
     echo "python"
   elif command -v python3 >/dev/null 2>&1; then

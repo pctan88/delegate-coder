@@ -10,7 +10,7 @@ obvious syntax errors.
 | | |
 |---|---|
 | **Feature** | DELEGATE-CODER-002 — resilient contract execution |
-| **Status** | In review — PR #6 (`941e642`), not yet released |
+| **Status** | In review — PR #6 (`576268b`), not yet released |
 | **Repository** | `delegate-coder` — marketplace, plugin, and benchmark harness |
 | **Source implementation** | `contract-router.sh`, `delegate.sh`, `detect-test.sh`, and deterministic contract tests |
 | **Cross-repo work** | Not applicable |
@@ -38,6 +38,6 @@ this feature must not be described as production-ready.
   selected.
 - The frozen v1 benchmark is not modified. Contract measurements require a
   separately named additive dataset.
-- The contract-router and core shell suites pass on PR #6, but release remains
-  blocked by the open security and command-construction findings recorded in
-  `TEST_PLAN.md` and `RELEASE_CHECKLIST.md`.
+- The contract-router and core shell suites pass, and all planned security and
+  command-construction findings have been resolved and verified; release remains
+  conditional on final maintainer sign-off.

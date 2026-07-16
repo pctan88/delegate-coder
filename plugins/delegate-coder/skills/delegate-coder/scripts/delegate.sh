@@ -261,8 +261,9 @@ resolve_contract_settings() {
 }
 
 ensure_runtime_log_ignored() {
-  local root="$1" exclude migration_status
-  exclude="$(git -C "$root" rev-parse --git-path info/exclude)" || return 1
+  local root="$1" git_dir exclude migration_status
+  git_dir="$(git -C "$root" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  exclude="$git_dir/info/exclude"
   mkdir -p "$(dirname "$exclude")" || return 1
   touch "$exclude" || return 1
   python3 - "$exclude" <<'PY'
@@ -318,6 +319,7 @@ prepare_contract_entry() {
   dirty="$(git status --porcelain --untracked-files=all)"
   [[ -z "$dirty" ]] || { echo "contract mode requires a clean worktree before the first write" >&2; return 1; }
   CONTRACT_BRANCH="$branch"
+  CONTRACT_ROOT="$root"
 }
 
 report_value() {
@@ -336,7 +338,7 @@ if [[ "$MODE" == "contract" ]]; then
   validate_contract_paths "$TASK" || exit 1
   resolve_contract_settings || exit 1
   prepare_contract_entry || exit 1
-  CONTRACT_LOGFILE=".claude/delegate-coder.log"
+  CONTRACT_LOGFILE="$CONTRACT_ROOT/.claude/delegate-coder.log"
   CONTRACT_T0="$(date +%s)"
   export DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
   append_json_event "$CONTRACT_LOGFILE" local-ollama "$CONTRACT_MODEL" contract start branch "$CONTRACT_BRANCH"

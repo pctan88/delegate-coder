@@ -952,4 +952,45 @@ DELEGATE_MIN_OUTPUT_BUDGET=8192 run_dispatch "$context_json" || fail "min budget
 contains "$ARTIFACT_DIR/request.1" '"num_predict": 8192' "expected custom budget of 8192 in request"
 pass "configurable output budget validation"
 
+# Phase 2: nested-cwd project Python check
+setup_case nested_cwd
+echo "/.venv" >> "$CASE_DIR/.gitignore"
+git -C "$CASE_DIR" add .gitignore
+git -C "$CASE_DIR" commit -qm ignore-venv
+
+mkdir -p "$CASE_DIR/.venv/bin"
+cat > "$CASE_DIR/.venv/bin/python" <<SH
+#!/usr/bin/env bash
+exit 0
+SH
+chmod +x "$CASE_DIR/.venv/bin/python"
+
+mkdir -p "$CASE_DIR/nested/dir"
+printf 'original_code\n' > "$CASE_DIR/nested/dir/target.py"
+git -C "$CASE_DIR" add nested/dir/target.py
+git -C "$CASE_DIR" commit -qm add-nested-py
+
+(
+  cd "$CASE_DIR/nested/dir" || exit 1
+  context_json='{"target_file": "nested/dir/target.py", "instructions": "update target", "test_command": "true"}'
+  PATH="$CASE_DIR/bin:$PATH" \
+  OLLAMA_PS_FILE="/dev/null" \
+  OLLAMA_STOP_LOG="/dev/null" \
+  CURL_COUNT_FILE="$CURL_COUNT_FILE_PATH" \
+  CURL_REQUEST_PREFIX="$ARTIFACT_DIR/request." \
+  CURL_ENV_FILE="$ARTIFACT_DIR/curl.env" \
+  CURL_ARGS_FILE="$ARTIFACT_DIR/curl.args" \
+  CURL_ORDER_FILE="$ARTIFACT_DIR/curl.order" \
+  OLLAMA_HOST="http://127.0.0.1:11434" \
+  CURL_MODE="good" \
+  DELEGATE_MODEL="qwen3-coder:30b" \
+  DELEGATE_NUM_CTX="32768" \
+  DELEGATE_KEEP_ALIVE="30m" \
+  DELEGATE_TEST_TIMEOUT="300" \
+  bash "$DISPATCH" contract "$context_json" > "$STDOUT_PATH" 2> "$STDERR_PATH"
+) || fail "nested-cwd contract should run"
+
+contains "$STDERR_PATH" ".venv/bin/python" "expected nested-cwd to use absolute .venv python interpreter"
+pass "nested-cwd python resolution"
+
 echo "All contract-router tests passed."
