@@ -378,29 +378,39 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        if parsed.path == "/message":
-            query = urllib.parse.parse_qs(parsed.query)
-            client_id = query.get("client_id", [None])[0]
-            if not client_id:
-                self.send_response(400)
-                self.end_headers()
-                return
+        query = urllib.parse.parse_qs(parsed.query)
+        client_id = query.get("client_id", [None])[0]
 
         resp = handle_request(req)
-        if resp is not None:
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
+
+        with CLIENTS_LOCK:
+            use_sse = client_id and client_id in CLIENTS
+
+        if use_sse:
+            with CLIENTS_LOCK:
+                q = CLIENTS.get(client_id)
+            if q is not None:
+                q.put(resp)
+            self.send_response(202)
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            resp_str = json.dumps(resp)
-            self.wfile.write(resp_str.encode("utf-8"))
-            sys.stderr.write(f"mcp_server [SSE]: Response: {resp_str}\n")
+            sys.stderr.write(f"mcp_server [SSE]: Queued response for client {client_id}\n")
             sys.stderr.flush()
         else:
-            self.send_response(202)
-            self.end_headers()
-            sys.stderr.write("mcp_server [SSE]: Response: 202 Accepted\n")
-            sys.stderr.flush()
+            if resp is not None:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                resp_str = json.dumps(resp)
+                self.wfile.write(resp_str.encode("utf-8"))
+                sys.stderr.write(f"mcp_server [SSE]: Responded directly in POST body: {resp_str}\n")
+                sys.stderr.flush()
+            else:
+                self.send_response(202)
+                self.end_headers()
+                sys.stderr.write("mcp_server [SSE]: Response: 202 Accepted\n")
+                sys.stderr.flush()
 
 def run_sse_server(port):
     sys.stderr.write(f"mcp_server [SSE]: Starting HTTP/SSE server on port {port}...\n")
