@@ -126,6 +126,22 @@ contains "$FAKE_ARGV" "--model neutral-model" "neutral config should take preced
 absent "$FAKE_ARGV" "legacy-model" "legacy config must not override neutral config"
 pass "neutral config takes precedence over legacy Claude config"
 
+# Config is resolved from git root even when invoked from a nested subdirectory.
+setup_case nestedcwd_config
+mkdir -p "$CASE_DIR/.delegate-coder" "$CASE_DIR/nested/dir"
+cat > "$CASE_DIR/.delegate-coder/config.json" <<'JSON'
+{ "agent": "codex", "model": "rootcfg-model" }
+JSON
+(
+  cd "$CASE_DIR/nested/dir" || exit 1
+  HOME="$TEST_ROOT/home" \
+  PATH="$CASE_DIR/bin:$TEST_PATH" \
+  DELEGATE_PATH_EXTRA="$CASE_DIR/bin" \
+  bash "$DISPATCH" read "understand" >/dev/null 2>&1
+) || fail "nested-cwd config run failed"
+contains "$FAKE_ARGV" "--model rootcfg-model" "config from git root should reach worker argv when invoked from nested subdir"
+pass "config resolved from git root when CWD is nested subdir"
+
 # The optional implementation backend preserves the normal agent default and
 # refuses non-contract input without silently falling back to a hosted worker.
 setup_case backenddefault

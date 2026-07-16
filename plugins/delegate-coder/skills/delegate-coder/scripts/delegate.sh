@@ -10,10 +10,9 @@ export PATH="$EXTRA_PATHS:$COMMON_DIRS:$PATH"
 
 MODE="${1:-}"
 TASK="${2:-}"
-# Codex onboarding writes the neutral project config. Keep the legacy Claude
-# path as a fallback so existing projects continue to work unchanged.
-CONFIG=".delegate-coder/config.json"
-LEGACY_CONFIG=".claude/delegate-coder.json"
+DELEGATE_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo ".")"
+CONFIG="$DELEGATE_ROOT/.delegate-coder/config.json"
+LEGACY_CONFIG="$DELEGATE_ROOT/.claude/delegate-coder.json"
 if [[ ! -f "$CONFIG" && -f "$LEGACY_CONFIG" ]]; then
   CONFIG="$LEGACY_CONFIG"
 fi

@@ -10,7 +10,7 @@ obvious syntax errors.
 | | |
 |---|---|
 | **Feature** | DELEGATE-CODER-002 — resilient contract execution |
-| **Status** | In review — PR #6 (`512b73a`), not yet released |
+| **Status** | In review — PR #6 (`df067c6`), not yet released |
 | **Repository** | `delegate-coder` — marketplace, plugin, and benchmark harness |
 | **Source implementation** | `contract-router.sh`, `delegate.sh`, `detect-test.sh`, and deterministic contract tests |
 | **Cross-repo work** | Not applicable |
@@ -28,9 +28,11 @@ orchestrator owns architecture, security, privacy, malformed-input handling,
 and final acceptance. A contract worker remains limited to a bounded target
 with an objective test.
 
-Context files are read-only references, not trusted instructions. Until the
-secret-file denylist, size cap, and safe syntax-command execution are merged,
-this feature must not be described as production-ready.
+Context files are read-only references, not trusted instructions. The
+secret-file denylist, size cap, safe syntax-command execution, linked-worktree
+exclude resolution, and CWD-independent config and interpreter lookups have all
+been implemented, tested, and are present on PR #6. The feature remains pending
+final maintainer sign-off before a production release.
 
 ## Current gates
 
