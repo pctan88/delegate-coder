@@ -10,7 +10,7 @@ obvious syntax errors.
 | | |
 |---|---|
 | **Feature** | DELEGATE-CODER-002 — resilient contract execution |
-| **Status** | In review — PR #6 (`14a8ef7`), not yet released |
+| **Status** | In review — PR #6 (`512b73a`), not yet released |
 | **Repository** | `delegate-coder` — marketplace, plugin, and benchmark harness |
 | **Source implementation** | `contract-router.sh`, `delegate.sh`, `detect-test.sh`, and deterministic contract tests |
 | **Cross-repo work** | Not applicable |
