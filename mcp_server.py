@@ -24,26 +24,31 @@ DOCTOR_SH = ROOT_DIR / "plugins" / "delegate-coder" / "skills" / "delegate-coder
 
 SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05"]
 
+PROJECT_LOCKS = {}
+PROJECT_LOCKS_LOCK = threading.Lock()
+
 def run_command(args, cwd=None):
     try:
         env = os.environ.copy()
         # Default to the process's active CWD (which matches the client's active project workspace)
         target_cwd = cwd if cwd is not None else os.getcwd()
-        if cwd is not None:
-            p = pathlib.Path(cwd).resolve(strict=True)
-            if not p.is_dir():
-                raise NotADirectoryError(f"project_root is not a directory: {cwd}")
-            target_cwd = str(p)
+        resolved_path = str(pathlib.Path(target_cwd).resolve(strict=True))
 
-        res = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            cwd=target_cwd,
-            env=env,
-            timeout=1200  # 20-minute execution timeout to prevent hung loops
-        )
-        return res.returncode, res.stdout, res.stderr
+        with PROJECT_LOCKS_LOCK:
+            if resolved_path not in PROJECT_LOCKS:
+                PROJECT_LOCKS[resolved_path] = threading.Lock()
+            lock = PROJECT_LOCKS[resolved_path]
+
+        with lock:
+            res = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                cwd=resolved_path,
+                env=env,
+                timeout=1200  # 20-minute execution timeout to prevent hung loops
+            )
+            return res.returncode, res.stdout, res.stderr
     except subprocess.TimeoutExpired:
         return 124, "", "mcp_server: command execution timed out (20-minute limit exceeded)"
     except Exception as e:
@@ -310,22 +315,94 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
         sys.stderr.write(f"mcp_server [SSE]: {format % args}\n")
         sys.stderr.flush()
 
+    def send_http_error(self, code, message):
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Connection", "close")
+        origin = self.headers.get("Origin")
+        if origin and self.is_origin_allowed():
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.end_headers()
+        self.wfile.write(message.encode("utf-8"))
+        self.close_connection = True
+
+    def is_origin_allowed(self):
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            try:
+                parsed = urllib.parse.urlparse(origin)
+                if parsed.scheme not in ("http", "https"):
+                    return False
+                hostname = (parsed.hostname or "").lower()
+                if hostname not in ("127.0.0.1", "localhost"):
+                    return False
+            except Exception:
+                return False
+        return True
+
+    def is_authorized(self):
+        auth_token = os.environ.get("MCP_AUTH_TOKEN")
+        if not auth_token:
+            return True
+        auth_header = self.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return False
+        token = auth_header[7:].strip()
+        return token == auth_token
+
+    def preflight_check(self):
+        if not self.is_origin_allowed():
+            self.send_http_error(403, "Forbidden: Cross-Origin request denied")
+            return False
+
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path in ("/sse", "/message"):
+            if not self.is_authorized():
+                self.send_http_error(401, "Unauthorized: Missing or invalid Authorization token")
+                return False
+        return True
+
     def do_OPTIONS(self):
+        if not self.is_origin_allowed():
+            self.send_response(403)
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            return
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        origin = self.headers.get("Origin")
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
 
+    def do_DELETE(self):
+        if not self.preflight_check():
+            return
+        self.send_response(200)
+        origin = self.headers.get("Origin")
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.end_headers()
+
     def do_GET(self):
+        if not self.preflight_check():
+            return
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/message":
+            self.send_http_error(405, "Method Not Allowed: GET /message is not supported")
+            return
+
         if parsed.path == "/sse":
             client_id = str(uuid.uuid4())
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            origin = self.headers.get("Origin")
+            if origin:
+                self.send_header("Access-Control-Allow-Origin", origin)
             self.end_headers()
 
             # Client must POST client messages to /message?client_id=client_id
@@ -362,24 +439,56 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
                 sys.stderr.flush()
         else:
             self.send_response(404)
+            self.send_header("Connection", "close")
             self.end_headers()
+            self.close_connection = True
 
     def do_POST(self):
+        if not self.preflight_check():
+            return
         parsed = urllib.parse.urlparse(self.path)
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode("utf-8")
+        if parsed.path == "/sse":
+            self.send_http_error(405, "Method Not Allowed: POST /sse is not supported")
+            return
+
+        content_length_str = self.headers.get("Content-Length")
+        if content_length_str is None:
+            self.send_http_error(400, "Bad Request: Missing Content-Length header")
+            return
+        try:
+            content_length = int(content_length_str)
+        except ValueError:
+            self.send_http_error(400, "Bad Request: Invalid Content-Length header")
+            return
+
+        if content_length > 1048576:  # 1MB
+            self.send_http_error(413, "Payload Too Large: Limit is 1MB")
+            return
+
+        try:
+            body = self.rfile.read(content_length).decode("utf-8")
+        except Exception as e:
+            self.send_http_error(400, f"Bad Request: Error reading body: {e}")
+            return
+
         sys.stderr.write(f"mcp_server [SSE]: POST {self.path} body: {body}\n")
         sys.stderr.flush()
 
         try:
             req = json.loads(body)
         except Exception:
-            self.send_response(400)
-            self.end_headers()
+            self.send_http_error(400, "Bad Request: Malformed JSON")
             return
 
         query = urllib.parse.parse_qs(parsed.query)
         client_id = query.get("client_id", [None])[0]
+
+        if parsed.path == "/message":
+            with CLIENTS_LOCK:
+                is_active = client_id and client_id in CLIENTS
+            if not is_active:
+                self.send_http_error(404, "Not Found: Client session not found or inactive")
+                return
 
         resp = handle_request(req)
 
@@ -392,7 +501,9 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
             if q is not None:
                 q.put(resp)
             self.send_response(202)
-            self.send_header("Access-Control-Allow-Origin", "*")
+            origin = self.headers.get("Origin")
+            if origin:
+                self.send_header("Access-Control-Allow-Origin", origin)
             self.end_headers()
             sys.stderr.write(f"mcp_server [SSE]: Queued response for client {client_id}\n")
             sys.stderr.flush()
@@ -401,21 +512,22 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
                 accept = self.headers.get("Accept", "")
                 is_event_stream = "text/event-stream" in accept or parsed.path == "/sse"
 
+                self.send_response(200)
+                origin = self.headers.get("Origin")
+                if origin:
+                    self.send_header("Access-Control-Allow-Origin", origin)
+
                 if is_event_stream:
-                    self.send_response(200)
                     self.send_header("Content-Type", "text/event-stream")
                     self.send_header("Cache-Control", "no-cache")
                     self.send_header("Connection", "keep-alive")
-                    self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
                     resp_str = f"event: message\ndata: {json.dumps(resp)}\n\n"
                     self.wfile.write(resp_str.encode("utf-8"))
                     sys.stderr.write(f"mcp_server [SSE]: Responded via Streamable HTTP: {resp_str}\n")
                     sys.stderr.flush()
                 else:
-                    self.send_response(200)
                     self.send_header("Content-Type", "application/json")
-                    self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
                     resp_str = json.dumps(resp)
                     self.wfile.write(resp_str.encode("utf-8"))
@@ -423,6 +535,9 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
                     sys.stderr.flush()
             else:
                 self.send_response(202)
+                origin = self.headers.get("Origin")
+                if origin:
+                    self.send_header("Access-Control-Allow-Origin", origin)
                 self.end_headers()
                 sys.stderr.write("mcp_server [SSE]: Response: 202 Accepted\n")
                 sys.stderr.flush()

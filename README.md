@@ -95,6 +95,31 @@ This repository exposes a standard Model Context Protocol (MCP) stdio wrapper (`
 }
 ```
 
+### HTTP/SSE (Streamable HTTP) Mode
+
+You can also run the MCP server in background daemon mode (using tools like `pm2`) by providing the `--port <port>` flag:
+```bash
+python3 mcp_server.py --port 8001
+```
+
+**Client Configuration for SSE (`mcp_config.json`):**
+```json
+{
+  "mcpServers": {
+    "delegate-coder": {
+      "serverUrl": "http://127.0.0.1:8001/sse"
+    }
+  }
+}
+```
+
+> [!CAUTION]
+> **Security Warning:** Running the server in HTTP/SSE mode exposes command execution capabilities and must **never** be exposed beyond `localhost` (127.0.0.1).
+
+**Cross-Origin & Authentication Hardening:**
+- **CORS Origin Check**: The server strictly validates incoming requests containing an `Origin` header. Requests from any non-local hostname (not matching `127.0.0.1` or `localhost`) are immediately rejected with `403 Forbidden` to prevent drive-by attacks from arbitrary websites in your browser.
+- **Shared-Secret Authentication**: For additional security, you can enforce token-based access by setting the `MCP_AUTH_TOKEN` environment variable on the server process. If set, all requests to `/sse` and `/message` must carry a matching `Authorization: Bearer <token>` header, otherwise they are rejected with `401 Unauthorized`.
+
 **Exposed Tools:**
 - `delegate_contract`: Run a single-file Task Contract using a local Ollama model (supporting syntax preflight, transactional rollback, and auto-retry).
 - `delegate_exec`: Route general execution/implementation tasks to the configured secondary worker CLI (e.g., `mimo`, `aider`, `gemini`, `qwen`, `opencode`).
