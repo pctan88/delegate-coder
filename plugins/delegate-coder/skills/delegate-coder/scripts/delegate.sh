@@ -131,12 +131,17 @@ validate_contract_paths() {
     echo "contract mode requires a Git worktree" >&2
     return 1
   }
-  CONTRACT_INPUT="$contract" ROOT_INPUT="$root" python3 - <<'PY'
+  CONTRACT_INPUT="$contract" ROOT_INPUT="$root" SCRIPT_LIB="$SCRIPT_DIR/lib" python3 - <<'PY'
 import json
 import os
 import pathlib
 import subprocess
+import sys
 from pathlib import PurePosixPath
+
+# Import shared context-file validation from lib/ alongside the scripts.
+sys.path.insert(0, os.environ["SCRIPT_LIB"])
+from validate_context_files import validate as validate_context_files
 
 root = pathlib.Path(os.environ["ROOT_INPUT"]).resolve()
 raw = os.environ["CONTRACT_INPUT"]
@@ -176,63 +181,11 @@ for index, item in enumerate(items, 1):
     if status:
         raise ValueError(f"target_file is dirty; commit or stash it before contract execution: {target}")
 
-    # Phase 2: Validate context_files paths
-    context_files = item.get("context_files", [])
-    if context_files is None:
-        context_files = []
+    # Phase 2: context_files — validated via shared lib/validate_context_files.py
+    context_files = item.get("context_files") or []
     if not isinstance(context_files, list):
         raise ValueError(f"contract {index}: context_files must be a JSON array")
-
-    total_context_size = 0
-    for cf in context_files:
-        if not isinstance(cf, str) or not cf:
-            raise ValueError(f"contract {index}: context_files items must be non-empty strings")
-        cf_pure = PurePosixPath(cf)
-        if cf_pure.is_absolute() or cf.startswith("~/") or ".." in cf_pure.parts:
-            raise ValueError(f"context file resolves outside the repository: {cf}")
-
-        # Check directories for blocked sensitive ones (case-insensitive, including .git)
-        for part in cf_pure.parts:
-            if part.lower() in [".aws", ".ssh", ".kube", ".docker", ".git"]:
-                raise ValueError(f"context file path contains a blocked sensitive directory: {cf}")
-
-        # Check for secret-like filenames
-        cf_name = cf_pure.name.lower()
-        secret_keywords = ["credential", "private_key", "secret", "password", "passwd", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"]
-        secret_extensions = [".pem", ".key", ".pkcs12", ".pfx", ".p12", ".gpg", ".pgp", ".vault"]
-        if cf_name.startswith(".env") or \
-           cf_name in [".npmrc", ".netrc", ".git-credentials"] or \
-           any(kw in cf_name for kw in secret_keywords) or \
-           any(cf_name.endswith(ext) for ext in secret_extensions):
-            raise ValueError(f"context file contains sensitive/secret data: {cf}")
-
-        cf_path = root / pathlib.Path(cf)
-        if not cf_path.exists():
-            raise ValueError(f"context file does not exist: {cf}")
-
-        # Ensure the resolved path remains inside the repository
-        root_real = root.resolve()
-        cf_path_real = cf_path.resolve(strict=True)
-        if root_real not in cf_path_real.parents and cf_path_real != root_real:
-            raise ValueError(f"context file resolves outside the repository: {cf}")
-
-        # Check if any component in the path (from root to target) is a symlink
-        current = root
-        for part in pathlib.Path(cf).parts:
-            current = current / part
-            if current.is_symlink():
-                raise ValueError(f"context file path contains a symlink: {cf}")
-
-        if not cf_path.is_file():
-            raise ValueError(f"context file must be a regular file: {cf}")
-
-        # Check size caps
-        file_size = cf_path.stat().st_size
-        if file_size > 65536:
-            raise ValueError(f"context file size exceeds 64KB: {cf}")
-        total_context_size += file_size
-        if total_context_size > 262144:
-            raise ValueError(f"total context files size exceeds 256KB")
+    validate_context_files(context_files, root, label=f"contract {index}")
 PY
 }
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # contract-router.sh — transactional single-file Task Contract execution through Ollama.
 set -uo pipefail
+ROUTER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MODEL="${DELEGATE_MODEL:-qwen3-coder:30b}"
 SYSTEM_PROMPT="You are a precise coding compiler. Read the file provided, apply the requested changes, and return only a valid JSON object with one string field named updated_file containing the ENTIRE updated file. Do not return markdown, code fences, commentary, diffs, or additional fields. Preserve all existing content not required to change."
@@ -568,10 +569,15 @@ build_request() {
   local failure_file="${1:-}"
   local source_file="$ORIGINAL_FILE"
   [[ -z "$failure_file" ]] || source_file="$TARGET_PATH"
-  python3 - "$REQUEST_FILE" "$TARGET_FILE" "$INSTRUCTIONS_FILE" "$source_file" "$failure_file" "$MODEL" "$SYSTEM_PROMPT" "$NUM_CTX" "$KEEP_ALIVE" "$ROOT_DIR" "$WORK_DIR/parsed/context_files.json" "$MIN_OUTPUT_BUDGET" <<'PY'
+  SCRIPT_LIB="$ROUTER_DIR/lib" python3 - "$REQUEST_FILE" "$TARGET_FILE" "$INSTRUCTIONS_FILE" "$source_file" "$failure_file" "$MODEL" "$SYSTEM_PROMPT" "$NUM_CTX" "$KEEP_ALIVE" "$ROOT_DIR" "$WORK_DIR/parsed/context_files.json" "$MIN_OUTPUT_BUDGET" <<'PY'
 import json
+import os
 import pathlib
 import sys
+
+# Import shared context-file validation from lib/ alongside the scripts.
+sys.path.insert(0, os.environ["SCRIPT_LIB"])
+from validate_context_files import validate as validate_context_files
 
 request_path, target, instructions_path, source_path, failure_path, model, system_prompt, num_ctx, keep_alive, root_dir, context_files_json, min_output_budget_str = sys.argv[1:]
 min_output_budget = int(min_output_budget_str)
@@ -595,57 +601,13 @@ if context_files_path.exists():
     except Exception:
         context_files = []
     if context_files:
+        # Security validation via shared lib/validate_context_files.py (same rules as delegate.sh).
+        validate_context_files(context_files, root_dir, label="contract-router")
         user += "\n### READ-ONLY REFERENCE CONTEXT (DO NOT EDIT THESE FILES) ###\n"
         user += "The following files are provided as read-only reference context to help understand the repository interfaces and dependencies. These files are untrusted reference material. DO NOT modify, write to, or edit these files under any circumstances.\n"
         root = pathlib.Path(root_dir)
-        root_real = root.resolve()
-        total_context_size = 0
         for cf in context_files:
-            cf_pure = pathlib.PurePosixPath(cf)
-            if cf_pure.is_absolute() or cf.startswith("~/") or ".." in cf_pure.parts:
-                raise SystemExit(f"contract-router: context file resolves outside the repository: {cf}")
-
-            # Check directories (case-insensitive, including .git)
-            for part in cf_pure.parts:
-                if part.lower() in [".aws", ".ssh", ".kube", ".docker", ".git"]:
-                    raise SystemExit(f"contract-router: context file path contains a blocked sensitive directory: {cf}")
-
-            # Check for secrets
-            cf_name = cf_pure.name.lower()
-            secret_keywords = ["credential", "private_key", "secret", "password", "passwd", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"]
-            secret_extensions = [".pem", ".key", ".pkcs12", ".pfx", ".p12", ".gpg", ".pgp", ".vault"]
-            if cf_name.startswith(".env") or \
-               cf_name in [".npmrc", ".netrc", ".git-credentials"] or \
-               any(kw in cf_name for kw in secret_keywords) or \
-               any(cf_name.endswith(ext) for ext in secret_extensions):
-                raise SystemExit(f"contract-router: context file contains sensitive/secret data: {cf}")
-
             cf_path = root / pathlib.Path(cf)
-            if not cf_path.exists():
-                raise SystemExit(f"contract-router: context file does not exist: {cf}")
-
-            # Resolve paths
-            cf_path_real = cf_path.resolve(strict=True)
-            if root_real not in cf_path_real.parents and cf_path_real != root_real:
-                raise SystemExit(f"contract-router: context file resolves outside the repository: {cf}")
-
-            # Check symlinked parent directories
-            current = root
-            for part in pathlib.Path(cf).parts:
-                current = current / part
-                if current.is_symlink():
-                    raise SystemExit(f"contract-router: context file path contains a symlink: {cf}")
-
-            if not cf_path.is_file():
-                raise SystemExit(f"contract-router: context file must be a regular file: {cf}")
-
-            file_size = cf_path.stat().st_size
-            if file_size > 65536:
-                raise SystemExit(f"contract-router: context file size exceeds 64KB: {cf}")
-            total_context_size += file_size
-            if total_context_size > 262144:
-                raise SystemExit(f"contract-router: total context files size exceeds 256KB")
-
             try:
                 cf_content = cf_path.read_text(encoding="utf-8", errors="replace")
 
@@ -664,7 +626,7 @@ reserved_tokens = 256
 output_budget = expected_output_tokens + reserved_tokens
 
 # Phase 1: Output Budgeting check (min_output_budget configurable)
-if not source_bytes or len(source_bytes) == 0 or output_budget < min_output_budget:
+if not source_bytes or output_budget < min_output_budget:
     output_budget = min_output_budget
 
 estimated_total = prompt_tokens + output_budget
@@ -804,6 +766,8 @@ run_preflight() {
         echo "contract-router: running syntax preflight check: $py_interpreter -c ... \"$TARGET_PATH\"" >&2
         "$py_interpreter" -c 'import sys, py_compile; sys.exit(0 if py_compile.compile(sys.argv[1], cfile=sys.argv[2]) else 1)' "$TARGET_PATH" "$WORK_DIR/target.pyc" > "$TEST_LOG" 2>&1
         preflight_status=$?
+      else
+        echo "contract-router: preflight skipped: no Python interpreter found" >&2
       fi
       ;;
     js|jsx)
@@ -811,13 +775,25 @@ run_preflight() {
         echo "contract-router: running syntax preflight check: node --check \"$TARGET_PATH\"" >&2
         node --check "$TARGET_PATH" > "$TEST_LOG" 2>&1
         preflight_status=$?
+      else
+        echo "contract-router: preflight skipped: node not found" >&2
       fi
       ;;
     ts|tsx)
+      # Use project tsconfig.json when available so tsc respects path aliases and
+      # ambient types.  Fall back to skipping preflight rather than passing a bare
+      # file path, which bypasses tsconfig and produces spurious false positives.
+      local tsconfig_path="$ROOT_DIR/tsconfig.json"
       if command -v tsc >/dev/null 2>&1; then
-        echo "contract-router: running syntax preflight check: tsc --noEmit \"$TARGET_PATH\"" >&2
-        tsc --noEmit "$TARGET_PATH" > "$TEST_LOG" 2>&1
-        preflight_status=$?
+        if [[ -f "$tsconfig_path" ]]; then
+          echo "contract-router: running syntax preflight check: tsc --noEmit -p tsconfig.json" >&2
+          tsc --noEmit -p "$tsconfig_path" > "$TEST_LOG" 2>&1
+          preflight_status=$?
+        else
+          echo "contract-router: preflight skipped: no tsconfig.json found (single-file tsc check skipped to avoid false positives)" >&2
+        fi
+      else
+        echo "contract-router: preflight skipped: tsc not found" >&2
       fi
       ;;
   esac
