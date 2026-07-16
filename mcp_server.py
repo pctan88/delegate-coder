@@ -15,6 +15,8 @@ ROOT_DIR = pathlib.Path(__file__).parent.resolve()
 DELEGATE_SH = ROOT_DIR / "plugins" / "delegate-coder" / "skills" / "delegate-coder" / "scripts" / "delegate.sh"
 DOCTOR_SH = ROOT_DIR / "plugins" / "delegate-coder" / "skills" / "delegate-coder" / "scripts" / "doctor.sh"
 
+SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05"]
+
 def run_command(args, cwd=None):
     try:
         env = os.environ.copy()
@@ -49,13 +51,16 @@ def handle_request(req):
     params = req.get("params", {})
     
     if method == "initialize":
-        # Echo back the protocolVersion requested by the client, falling back to stable spec
-        client_version = params.get("protocolVersion", "2024-11-05")
+        requested_version = params.get("protocolVersion")
+        if requested_version in SUPPORTED_PROTOCOL_VERSIONS:
+            negotiated_version = requested_version
+        else:
+            negotiated_version = SUPPORTED_PROTOCOL_VERSIONS[-1]
         return {
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {
-                "protocolVersion": client_version,
+                "protocolVersion": negotiated_version,
                 "capabilities": {
                     "tools": {}
                 },
@@ -165,6 +170,16 @@ def handle_request(req):
         args = params.get("arguments", {})
         project_root = args.get("project_root")
         
+        if project_root is not None and not pathlib.Path(project_root).is_dir():
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {
+                    "code": -32602,
+                    "message": f"Invalid params: project_root does not exist or is not a directory: {project_root}"
+                }
+            }
+
         if name == "delegate_contract":
             target_file = args.get("target_file")
             instructions = args.get("instructions")
