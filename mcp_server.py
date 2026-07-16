@@ -398,14 +398,29 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
             sys.stderr.flush()
         else:
             if resp is not None:
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                resp_str = json.dumps(resp)
-                self.wfile.write(resp_str.encode("utf-8"))
-                sys.stderr.write(f"mcp_server [SSE]: Responded directly in POST body: {resp_str}\n")
-                sys.stderr.flush()
+                accept = self.headers.get("Accept", "")
+                is_event_stream = "text/event-stream" in accept or parsed.path == "/sse"
+
+                if is_event_stream:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Connection", "keep-alive")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    resp_str = f"event: message\ndata: {json.dumps(resp)}\n\n"
+                    self.wfile.write(resp_str.encode("utf-8"))
+                    sys.stderr.write(f"mcp_server [SSE]: Responded via Streamable HTTP: {resp_str}\n")
+                    sys.stderr.flush()
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    resp_str = json.dumps(resp)
+                    self.wfile.write(resp_str.encode("utf-8"))
+                    sys.stderr.write(f"mcp_server [SSE]: Responded directly in JSON body: {resp_str}\n")
+                    sys.stderr.flush()
             else:
                 self.send_response(202)
                 self.end_headers()
