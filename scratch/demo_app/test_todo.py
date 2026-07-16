@@ -22,7 +22,13 @@ if "added" not in res.stdout.lower() and "buy milk" not in res.stdout.lower():
 res = subprocess.run(["python3", "scratch/demo_app/todo_cli.py", "--list"], capture_output=True, text=True)
 if "buy milk" not in res.stdout.lower():
     print(f"Failed: --list output got: {res.stdout}")
+    if os.path.exists("todo_db.json"):
+        os.remove("todo_db.json")
     sys.exit(1)
+
+# Clean up database file so the repository is left clean
+if os.path.exists("todo_db.json"):
+    os.remove("todo_db.json")
 
 print("All tests passed!")
 sys.exit(0)
