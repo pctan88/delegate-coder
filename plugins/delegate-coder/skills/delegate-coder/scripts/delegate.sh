@@ -400,7 +400,8 @@ log_event() { # log_event <event> [key value ...]
 if [[ -f "$CONFIG" ]] && command -v jq >/dev/null 2>&1; then
   OVERRIDE="$(jq -r ".command_override.${MODE} // empty" "$CONFIG" 2>/dev/null)"
   if [[ -n "$OVERRIDE" ]]; then
-    CMD="${OVERRIDE//\{task\}/$TASK}"
+    export DELEGATE_TASK="$TASK"
+    CMD="${OVERRIDE//\{task\}/\"\$DELEGATE_TASK\"}"
     echo ">> [$AGENT/$MODE via override] $CMD" >&2
     log_event "start"
     _t0=$(date +%s)

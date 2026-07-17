@@ -351,4 +351,38 @@ d="$(mk dt_loose_test_empty)"
 [[ -z "$(dt "$d")" ]] || fail "empty loose test dir -> empty"
 pass "detect-test: loose test empty dir remains empty"
 
+# ── delegate.sh: command_override quote safety and injection prevention ────
+setup_case override_quotes
+mkdir -p "$CASE_DIR/.claude"
+mkdir -p "$CASE_DIR/bin"
+
+# Write a fake worker script that records its arguments byte-for-byte
+cat > "$CASE_DIR/bin/fake_worker.sh" <<EOF
+#!/usr/bin/env bash
+printf "%s" "\$1" > "$CASE_DIR/worker_arg1"
+EOF
+chmod +x "$CASE_DIR/bin/fake_worker.sh"
+
+# Write config specifying the command_override pointing to the fake worker
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<JSON
+{
+  "agent": "custom",
+  "command_override": {
+    "read": "fake_worker.sh {task}"
+  }
+}
+JSON
+
+# Run dispatch with a task containing quotes, apostrophe, \$(echo pwned), backticks
+injection_task="task's \"quotes\" \$(echo pwned) \`echo backticks\`"
+run_dispatch read "$injection_task" >/dev/null 2>&1 || fail "injection test run failed"
+
+# Verify that:
+# 1. No command execution side effects occurred
+# 2. The argument reached the worker exactly byte-identical
+[[ -f "$CASE_DIR/worker_arg1" ]] || fail "worker did not receive argument"
+arg_received="$(cat "$CASE_DIR/worker_arg1")"
+[[ "$arg_received" == "$injection_task" ]] || fail "argument corrupted: expected '$injection_task' but got '$arg_received'"
+pass "command_override handles quotes and prevents injections safely"
+
 echo "# all $PASS checks passed"
