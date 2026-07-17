@@ -1027,4 +1027,20 @@ dirty="$(git -C "$TEST_ROOT/linked-worktree" status --porcelain --untracked-file
 [[ -z "$dirty" ]] || fail "linked-worktree should be clean after successful contract run, but got: $dirty"
 pass "linked-worktree support with nested CWD"
 
+# ── contract-router.sh: sequential contract dirty preflight error check ───
+setup_case sequential-dirty
+make_contract target.txt "true" "$CASE_DIR/contract.json"
+OLLAMA_HOST=http://localhost:11434 run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "first contract should pass"
+# Overwrite contract.json for the second run
+make_contract target.txt "true" "$CASE_DIR/contract.json"
+set +e
+run_dispatch "$(cat "$CASE_DIR/contract.json")" > /dev/null 2> "$STDERR_PATH"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "sequential contract preflight check on dirty branch must fail"
+contains "$STDERR_PATH" "Why: A previous contract branch" "dirty tree why description"
+contains "$STDERR_PATH" "What to do: Checkout your base branch" "dirty tree what to do recommendation"
+contains "$STDERR_PATH" "Offending git status:" "dirty tree offending git status"
+pass "sequential contract dirty preflight check error message"
+
 echo "All contract-router tests passed."

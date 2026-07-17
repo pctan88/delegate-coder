@@ -367,7 +367,13 @@ snapshot_target() {
     fail "target_file must be a regular file: $TARGET_FILE"
   fi
   target_status="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all -- "$TARGET_FILE")"
-  [[ -z "$target_status" ]] || fail "target_file is dirty; commit or stash it before contract execution: $TARGET_FILE"
+  if [[ -n "$target_status" ]]; then
+    fail "target_file is dirty; commit or stash it before contract execution: $TARGET_FILE
+Why: A previous contract branch (e.g. delegate/contract-*) may be checked out with uncommitted changes.
+What to do: Checkout your base branch (e.g. main/master) or merge/stash/commit the delegate branch changes first.
+Offending git status:
+$target_status"
+  fi
   if [[ -f "$TARGET_PATH" ]]; then
     ORIGINAL_EXISTS=1
     cp "$TARGET_PATH" "$ORIGINAL_FILE" || fail "could not snapshot target file"
