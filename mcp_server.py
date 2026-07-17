@@ -39,7 +39,16 @@ def run_command(args, cwd=None):
                 PROJECT_LOCKS[resolved_path] = threading.Lock()
             lock = PROJECT_LOCKS[resolved_path]
 
-        with lock:
+        try:
+            busy_timeout = int(os.environ.get("MCP_BUSY_TIMEOUT", "60"))
+        except ValueError:
+            busy_timeout = 60
+
+        acquired = lock.acquire(timeout=busy_timeout)
+        if not acquired:
+            return 111, "", "mcp_server: project is busy with another delegated task; retry later"
+
+        try:
             res = subprocess.run(
                 args,
                 capture_output=True,
@@ -49,6 +58,8 @@ def run_command(args, cwd=None):
                 timeout=1200  # 20-minute execution timeout to prevent hung loops
             )
             return res.returncode, res.stdout, res.stderr
+        finally:
+            lock.release()
     except subprocess.TimeoutExpired:
         return 124, "", "mcp_server: command execution timed out (20-minute limit exceeded)"
     except Exception as e:
@@ -355,11 +366,9 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
             self.send_http_error(403, "Forbidden: Cross-Origin request denied")
             return False
 
-        parsed = urllib.parse.urlparse(self.path)
-        if parsed.path in ("/sse", "/message"):
-            if not self.is_authorized():
-                self.send_http_error(401, "Unauthorized: Missing or invalid Authorization token")
-                return False
+        if not self.is_authorized():
+            self.send_http_error(401, "Unauthorized: Missing or invalid Authorization token")
+            return False
         return True
 
     def do_OPTIONS(self):
@@ -471,8 +480,9 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
             self.send_http_error(400, f"Bad Request: Error reading body: {e}")
             return
 
-        sys.stderr.write(f"mcp_server [SSE]: POST {self.path} body: {body}\n")
-        sys.stderr.flush()
+        if os.environ.get("MCP_DEBUG") == "1":
+            sys.stderr.write(f"mcp_server [SSE]: POST {self.path} body: {body}\n")
+            sys.stderr.flush()
 
         try:
             req = json.loads(body)
@@ -505,8 +515,9 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
             if origin:
                 self.send_header("Access-Control-Allow-Origin", origin)
             self.end_headers()
-            sys.stderr.write(f"mcp_server [SSE]: Queued response for client {client_id}\n")
-            sys.stderr.flush()
+            if os.environ.get("MCP_DEBUG") == "1":
+                sys.stderr.write(f"mcp_server [SSE]: Queued response for client {client_id}\n")
+                sys.stderr.flush()
         else:
             if resp is not None:
                 accept = self.headers.get("Accept", "")
@@ -524,23 +535,26 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
                     self.end_headers()
                     resp_str = f"event: message\ndata: {json.dumps(resp)}\n\n"
                     self.wfile.write(resp_str.encode("utf-8"))
-                    sys.stderr.write(f"mcp_server [SSE]: Responded via Streamable HTTP: {resp_str}\n")
-                    sys.stderr.flush()
+                    if os.environ.get("MCP_DEBUG") == "1":
+                        sys.stderr.write(f"mcp_server [SSE]: Responded via Streamable HTTP: {resp_str}\n")
+                        sys.stderr.flush()
                 else:
                     self.send_header("Content-Type", "application/json")
                     self.end_headers()
                     resp_str = json.dumps(resp)
                     self.wfile.write(resp_str.encode("utf-8"))
-                    sys.stderr.write(f"mcp_server [SSE]: Responded directly in JSON body: {resp_str}\n")
-                    sys.stderr.flush()
+                    if os.environ.get("MCP_DEBUG") == "1":
+                        sys.stderr.write(f"mcp_server [SSE]: Responded directly in JSON body: {resp_str}\n")
+                        sys.stderr.flush()
             else:
                 self.send_response(202)
                 origin = self.headers.get("Origin")
                 if origin:
                     self.send_header("Access-Control-Allow-Origin", origin)
                 self.end_headers()
-                sys.stderr.write("mcp_server [SSE]: Response: 202 Accepted\n")
-                sys.stderr.flush()
+                if os.environ.get("MCP_DEBUG") == "1":
+                    sys.stderr.write("mcp_server [SSE]: Response: 202 Accepted\n")
+                    sys.stderr.flush()
 
 def run_sse_server(port):
     sys.stderr.write(f"mcp_server [SSE]: Starting HTTP/SSE server on port {port}...\n")

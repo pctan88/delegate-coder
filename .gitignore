@@ -31,3 +31,4 @@ _archive/
 *.patch
 .delegate-coder/
 NEXT_STEPS.md
+scratch/

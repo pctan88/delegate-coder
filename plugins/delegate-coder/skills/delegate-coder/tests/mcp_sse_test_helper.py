@@ -29,10 +29,10 @@ class TestServerProcess:
             env["MCP_AUTH_TOKEN"] = self.auth_token
         else:
             env.pop("MCP_AUTH_TOKEN", None)
-            
+
         mcp_server_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..", "mcp_server.py")
         mcp_server_path = os.path.abspath(mcp_server_path)
-        
+
         self.proc = subprocess.Popen(
             [sys.executable, mcp_server_path, "--port", str(self.port)],
             env=env,
@@ -57,21 +57,21 @@ class TestServerProcess:
 
 def test_sse_spec_compliance(port):
     base_url = f"http://127.0.0.1:{port}"
-    
+
     req = urllib.request.Request(f"{base_url}/sse", method="GET")
     sse_conn = urllib.request.urlopen(req)
-    
+
     line1 = sse_conn.readline().decode('utf-8').strip()
     line2 = sse_conn.readline().decode('utf-8').strip()
     sse_conn.readline()
-    
+
     assert line1 == "event: endpoint", f"Expected event: endpoint, got: {line1}"
     assert line2.startswith("data: /message?client_id="), f"Expected data: /message?client_id=..., got: {line2}"
     client_id = line2[len("data: /message?client_id="):]
-    
+
     msg_queue = queue.Queue()
     stop_event = threading.Event()
-    
+
     def read_stream():
         try:
             while not stop_event.is_set():
@@ -90,7 +90,7 @@ def test_sse_spec_compliance(port):
 
     t = threading.Thread(target=read_stream, daemon=True)
     t.start()
-    
+
     try:
         post_url = f"{base_url}/message?client_id={client_id}"
         init_body = json.dumps({
@@ -99,62 +99,62 @@ def test_sse_spec_compliance(port):
             "method": "initialize",
             "params": {"protocolVersion": "2024-11-05"}
         }).encode("utf-8")
-        
+
         post_req = urllib.request.Request(
             post_url,
             data=init_body,
             headers={"Content-Type": "application/json"},
             method="POST"
         )
-        
+
         with urllib.request.urlopen(post_req) as resp:
             assert resp.status == 202, f"Expected 202 Accepted, got: {resp.status}"
             resp_body = resp.read().decode('utf-8')
             assert resp_body == "", f"Expected empty response body, got: {resp_body}"
-            
+
         ev_type, ev_data = msg_queue.get(timeout=10.0)
         assert ev_type == "message", f"Expected event type 'message', got: {ev_type}"
         res_json = json.loads(ev_data)
         assert res_json.get("id") == 1
         assert "result" in res_json
         assert res_json["result"]["protocolVersion"] == "2024-11-05"
-        
+
         list_body = json.dumps({
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/list"
         }).encode("utf-8")
-        
+
         post_req = urllib.request.Request(
             post_url,
             data=list_body,
             headers={"Content-Type": "application/json"},
             method="POST"
         )
-        
+
         with urllib.request.urlopen(post_req) as resp:
             assert resp.status == 202, f"Expected 202 Accepted, got: {resp.status}"
-            
+
         ev_type, ev_data = msg_queue.get(timeout=10.0)
         assert ev_type == "message", f"Expected event type 'message', got: {ev_type}"
         res_json = json.loads(ev_data)
         assert res_json.get("id") == 2
         assert len(res_json["result"]["tools"]) > 0
-        
+
     finally:
         stop_event.set()
         sse_conn.close()
 
 def test_cors_and_token_auth(port):
     base_url = f"http://127.0.0.1:{port}"
-    
+
     req = urllib.request.Request(f"{base_url}/sse", headers={"Origin": "https://evil.example"}, method="GET")
     try:
         urllib.request.urlopen(req)
         assert False, "Expected 403 Forbidden for Origin: https://evil.example"
     except urllib.error.HTTPError as e:
         assert e.code == 403, f"Expected 403, got: {e.code}"
-        
+
     req = urllib.request.Request(f"{base_url}/sse", headers={"Origin": "http://localhost:3000"}, method="GET")
     with urllib.request.urlopen(req) as resp:
         assert resp.status == 200
@@ -164,30 +164,68 @@ def test_cors_and_token_auth(port):
     auth_server.start()
     try:
         auth_base = f"http://127.0.0.1:{auth_server.port}"
-        
+
         req = urllib.request.Request(f"{auth_base}/sse", method="GET")
         try:
             urllib.request.urlopen(req)
-            assert False, "Expected 401 for missing token"
+            assert False, "Expected 401 for missing token on GET /sse"
         except urllib.error.HTTPError as e:
             assert e.code == 401, f"Expected 401, got: {e.code}"
-            
+
         req = urllib.request.Request(f"{auth_base}/sse", headers={"Authorization": "Bearer wrong-token"}, method="GET")
         try:
             urllib.request.urlopen(req)
-            assert False, "Expected 401 for wrong token"
+            assert False, "Expected 401 for wrong token on GET /sse"
         except urllib.error.HTTPError as e:
             assert e.code == 401, f"Expected 401, got: {e.code}"
-            
+
         req = urllib.request.Request(f"{auth_base}/sse", headers={"Authorization": "Bearer secret-token-123"}, method="GET")
         with urllib.request.urlopen(req) as resp:
             assert resp.status == 200
+
+        # a) POST / with a valid tools/list body and NO Authorization header -> 401,
+        #    and the response body must NOT contain a JSON-RPC result.
+        list_body = json.dumps({
+            "jsonrpc": "2.0",
+            "id": 999,
+            "method": "tools/list"
+        }).encode("utf-8")
+        req_unauth_post = urllib.request.Request(
+            f"{auth_base}/",
+            data=list_body,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        try:
+            urllib.request.urlopen(req_unauth_post)
+            assert False, "Expected 401 for unauthorized POST /"
+        except urllib.error.HTTPError as e:
+            assert e.code == 401, f"Expected 401, got: {e.code}"
+            resp_body = e.read().decode("utf-8")
+            assert "result" not in resp_body, f"Expected no JSON-RPC result in body, got: {resp_body}"
+
+        # b) POST / with the correct "Authorization: Bearer <token>" -> 200 with a
+        #    valid JSON-RPC result.
+        req_auth_post = urllib.request.Request(
+            f"{auth_base}/",
+            data=list_body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer secret-token-123"
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req_auth_post) as resp:
+            assert resp.status == 200
+            resp_data = json.loads(resp.read().decode("utf-8"))
+            assert "result" in resp_data, f"Expected JSON-RPC result, got: {resp_data}"
+            assert "tools" in resp_data["result"]
     finally:
         auth_server.stop()
 
 def test_client_id_validation(port):
     base_url = f"http://127.0.0.1:{port}"
-    
+
     fake_client_id = str(uuid.uuid4())
     call_body = json.dumps({
         "jsonrpc": "2.0",
@@ -198,14 +236,14 @@ def test_client_id_validation(port):
             "arguments": {"all": False}
         }
     }).encode("utf-8")
-    
+
     req = urllib.request.Request(
         f"{base_url}/message?client_id={fake_client_id}",
         data=call_body,
         headers={"Content-Type": "application/json"},
         method="POST"
     )
-    
+
     try:
         urllib.request.urlopen(req)
         assert False, "Expected 404 Not Found for fake client_id"
@@ -218,7 +256,7 @@ def test_concurrency_safety(port):
     base_url = f"http://127.0.0.1:{port}"
     results = []
     errors = []
-    
+
     def run_call(thread_id):
         call_body = json.dumps({
             "jsonrpc": "2.0",
@@ -229,7 +267,7 @@ def test_concurrency_safety(port):
                 "arguments": {"all": False}
             }
         }).encode("utf-8")
-        
+
         req = urllib.request.Request(
             f"{base_url}/",
             data=call_body,
@@ -246,15 +284,15 @@ def test_concurrency_safety(port):
 
     t1 = threading.Thread(target=run_call, args=(1,))
     t2 = threading.Thread(target=run_call, args=(2,))
-    
+
     t1.start()
     t2.start()
     t1.join()
     t2.join()
-    
+
     assert len(errors) == 0, f"Got concurrency errors: {errors}"
     assert len(results) == 2, f"Expected 2 results, got: {len(results)}"
-    
+
     for tid, res in results:
         assert "result" in res
         assert "error" not in res
@@ -280,7 +318,7 @@ def test_request_robustness(port):
     req_missing_cl = b"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\r\n{}"
     resp_missing = send_raw_http(req_missing_cl)
     assert b"HTTP/1.1 400" in resp_missing, f"Expected HTTP 400, got: {resp_missing.decode('utf-8')}"
-    
+
     req_invalid_cl = b"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: abc\r\nContent-Type: application/json\r\n\r\n{}"
     resp_invalid = send_raw_http(req_invalid_cl)
     assert b"HTTP/1.1 400" in resp_invalid, f"Expected HTTP 400, got: {resp_invalid.decode('utf-8')}"
@@ -302,32 +340,104 @@ def test_request_robustness(port):
     resp_post_sse = send_raw_http(req_post_sse)
     assert b"HTTP/1.1 405" in resp_post_sse, f"Expected HTTP 405, got: {resp_post_sse.decode('utf-8')}"
 
+def test_payload_logging():
+    # 1. Start server WITHOUT MCP_DEBUG
+    server_no_debug = TestServerProcess()
+    server_no_debug.start()
+    try:
+        marker = "MARKER_SECRET_LOGGING_NO_LEAK_123"
+        call_body = json.dumps({
+            "jsonrpc": "2.0",
+            "id": 888,
+            "method": "tools/call",
+            "params": {
+                "name": "delegate_doctor",
+                "arguments": {"all": False, "marker": marker}
+            }
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{server_no_debug.port}/",
+            data=call_body,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req) as resp:
+            assert resp.status == 200
+
+        server_no_debug.proc.terminate()
+        _, stderr_bytes = server_no_debug.proc.communicate()
+        stderr_text = stderr_bytes.decode("utf-8")
+
+        assert marker not in stderr_text, "Found sensitive marker in debug log when MCP_DEBUG was off"
+    finally:
+        server_no_debug.stop()
+
+    # 2. Start server WITH MCP_DEBUG=1
+    server_with_debug = TestServerProcess()
+    os.environ["MCP_DEBUG"] = "1"
+    server_with_debug.start()
+    try:
+        marker = "MARKER_SECRET_LOGGING_MUST_LEAK_456"
+        call_body = json.dumps({
+            "jsonrpc": "2.0",
+            "id": 889,
+            "method": "tools/call",
+            "params": {
+                "name": "delegate_doctor",
+                "arguments": {"all": False, "marker": marker}
+            }
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{server_with_debug.port}/",
+            data=call_body,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req) as resp:
+            assert resp.status == 200
+
+        server_with_debug.proc.terminate()
+        _, stderr_bytes = server_with_debug.proc.communicate()
+        stderr_text = stderr_bytes.decode("utf-8")
+        print(f"DEBUG CAPTURED STDERR:\n{stderr_text}\n---")
+
+        assert marker in stderr_text, "Did not find sensitive marker in debug log when MCP_DEBUG=1 was active"
+    finally:
+        os.environ.pop("MCP_DEBUG", None)
+        server_with_debug.stop()
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 mcp_sse_test_helper.py <port>")
         sys.exit(1)
     port = int(sys.argv[1])
-    
+
     print("Running TASK 1 — SSE spec compliance...")
     test_sse_spec_compliance(port)
     print("ok - TASK 1 passed")
-    
+
     print("Running TASK 2 — CORS & Token Auth...")
     test_cors_and_token_auth(port)
     print("ok - TASK 2 passed")
-    
+
     print("Running TASK 3 — client_id validation...")
     test_client_id_validation(port)
     print("ok - TASK 3 passed")
-    
+
     print("Running TASK 4 — Concurrency safety...")
     test_concurrency_safety(port)
     print("ok - TASK 4 passed")
-    
+
     print("Running TASK 5 — Request robustness...")
     test_request_robustness(port)
     print("ok - TASK 5 passed")
-    
+
+    print("Running FIX 2 — Payload logging check...")
+    test_payload_logging()
+    print("ok - FIX 2 passed")
+
     print("All helper tasks completed successfully.")
 
 if __name__ == "__main__":
