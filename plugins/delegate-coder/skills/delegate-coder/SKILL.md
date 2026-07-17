@@ -39,7 +39,7 @@ Anything ambiguous, architecture-defining, or security-sensitive: do it yourself
 
 ## Step 3: Write the spec and delegate
 
-Worker agents execute well but interpret poorly. Your spec must include: exact scope (file paths), expected behavior, constraints (style, libraries, what NOT to touch), and how to verify (test command). Vague handoffs waste both your tokens and the worker's cycles.
+Worker agents execute well but interpret poorly. Your spec must include: exact scope (file paths), expected behavior, constraints (style, libraries, what NOT to touch), and how to verify (test command). Vague handoffs waste both your tokens and the worker's cycles. In your prompt/spec to the worker, explicitly instruct the worker to run the provided verify command and include its raw output; forbid claiming untested success. Also instruct the worker that if the spec conflicts with the existing codebase or itself, they must flag the conflict instead of silently complying.
 
 For `exec` tasks, first isolate the work:
 
@@ -65,6 +65,8 @@ Verify with deterministic checks, not by re-reading code:
 git diff --stat            # scope sanity: did it touch only what the spec allowed?
 <project test command>     # tests/lint/typecheck — zero orchestrator tokens
 ```
+
+A delegation without observed test output constitutes a failed delegation; you must re-run or escalate.
 
 Read the full `git diff` only when: the changeset is large (>5 files), it touches core/shared modules, tests fail, or the worker's own summary expresses uncertainty. Diffs can't lie; summaries can.
 
