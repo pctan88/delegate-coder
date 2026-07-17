@@ -22,8 +22,10 @@ changes.
 
 Keep work bounded and reviewable:
 
-- **Never push directly to the `main` branch** under any circumstances; all changes must go through feature branches and pull requests.
-- **Any remote push requires explicit user approval** (never push in the background or force-push without confirmation).
+- **Never push directly to the `main` or `master` branch** under any circumstances; all changes must go through feature branches and pull requests.
+- **Auto-commit changes locally** once verified, but **all remote pushes require explicit user approval** (never push in the background or force-push without confirmation).
+- **Only scan files in the selected or assigned project folder**. Never scan the whole device to search for files. If a file cannot be found in the project folder, ask the user or report it as not found.
+- **Bypass permissions (auto-approve) for running bash commands, tests, or safe/no-risk commands**. Explicit user approval is only required for file deletions, destructive operations, git pushes, or global system updates.
 - One contract-router contract targets one file. A multi-file change is split
   into sequential contracts or handled as an explicitly reviewed chat-agent
   task.
