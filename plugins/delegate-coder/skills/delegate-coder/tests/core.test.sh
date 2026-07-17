@@ -269,4 +269,86 @@ d="$(mk dt_none)"
 [[ -z "$(dt "$d")" ]] || fail "no markers -> empty"
 pass "detect-test: nothing recognized"
 
+# ── doctor.sh: command_override checks ─────────────────────────────────────
+DOCTOR="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/doctor.sh"
+
+setup_case docok
+mkdir -p "$CASE_DIR/.delegate-coder"
+cat > "$CASE_DIR/.delegate-coder/config.json" <<JSON
+{
+  "agent": "custom",
+  "command_override": {
+    "read": "$CASE_DIR/bin/codex {task}"
+  }
+}
+JSON
+(
+  cd "$CASE_DIR" || exit 1
+  HOME="$TEST_ROOT/home" \
+  PATH="$CASE_DIR/bin:$TEST_PATH" \
+  DELEGATE_PATH_EXTRA="$CASE_DIR/bin" \
+  bash "$DOCTOR" >/dev/null 2>&1
+) || fail "doctor override should report ready when command exists"
+pass "doctor.sh command_override (valid executable) is ready"
+
+setup_case docbad
+mkdir -p "$CASE_DIR/.delegate-coder"
+cat > "$CASE_DIR/.delegate-coder/config.json" <<JSON
+{
+  "agent": "custom",
+  "command_override": {
+    "read": "nonexistent-cmd-name-9fd0d3 {task}"
+  }
+}
+JSON
+(
+  cd "$CASE_DIR" || exit 1
+  HOME="$TEST_ROOT/home" \
+  PATH="$CASE_DIR/bin:$TEST_PATH" \
+  DELEGATE_PATH_EXTRA="$CASE_DIR/bin" \
+  bash "$DOCTOR" >/dev/null 2>&1
+) && fail "doctor override should report not ready when command is missing"
+pass "doctor.sh command_override (missing executable) is not ready"
+
+# ── delegate.sh: command_override duration log ─────────────────────────────
+setup_case override_duration
+mkdir -p "$CASE_DIR/.claude"
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<JSON
+{
+  "agent": "custom",
+  "command_override": {
+    "read": "sleep 1 && echo OVERRIDE_RAN {task}"
+  }
+}
+JSON
+run_dispatch read "duration-test" >/dev/null 2>&1 || fail "duration run failed"
+LOG="$CASE_DIR/.claude/delegate-coder.log"
+[[ -f "$LOG" ]] || fail "audit log should be created for override"
+duration="$(jq -e 'select(.event=="end") | .duration_s' "$LOG" 2>/dev/null || grep -o '"duration_s"[[:space:]]*:[[:space:]]*[0-9]*' "$LOG" | sed 's/.*:[[:space:]]*//')"
+[[ "$duration" -ge 1 ]] || fail "duration_s should be >= 1 for sleep 1 (got $duration)"
+pass "command_override duration_s log is accurate"
+
+# ── detect-test.sh: Python loose root tests fallback ───────────────────────
+d="$(mk dt_loose_test)"
+: > "$d/test_calculator.py"
+_py_interp=""
+if [[ -x "$d/.venv/bin/python" ]]; then _py_interp="$d/.venv/bin/python"
+elif [[ -x "$d/venv/bin/python" ]]; then _py_interp="$d/venv/bin/python"
+elif command -v python >/dev/null 2>&1; then _py_interp="python"
+elif command -v python3 >/dev/null 2>&1; then _py_interp="python3"
+fi
+if [[ -n "$_py_interp" ]]; then
+  _quoted_py="$(printf '%q' "$_py_interp")"
+  if "$_py_interp" -c "import pytest" >/dev/null 2>&1; then
+    [[ "$(dt "$d")" == "$_quoted_py -m pytest -q" ]] || fail "loose test_*.py -> pytest"
+  else
+    [[ "$(dt "$d")" == "$_quoted_py -m unittest discover" ]] || fail "loose test_*.py -> unittest fallback"
+  fi
+fi
+pass "detect-test: loose test_*.py at root"
+
+d="$(mk dt_loose_test_empty)"
+[[ -z "$(dt "$d")" ]] || fail "empty loose test dir -> empty"
+pass "detect-test: loose test empty dir remains empty"
+
 echo "# all $PASS checks passed"

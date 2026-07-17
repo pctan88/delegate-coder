@@ -179,7 +179,12 @@ for index, item in enumerate(items, 1):
         text=True,
     )
     if status:
-        raise SystemExit(f"delegate: target_file is dirty; commit or stash it before contract execution: {target}")
+        raise SystemExit(
+            f"delegate: target_file is dirty; commit or stash it before contract execution: {target}\n"
+            f"Why: A previous contract branch (e.g. delegate/contract-*) may be checked out with uncommitted changes.\n"
+            f"What to do: Checkout your base branch (e.g. main/master) or merge/stash/commit the delegate branch changes first.\n"
+            f"Offending git status:\n{status.strip()}"
+        )
 
     # Phase 2: context_files — validated via shared lib/validate_context_files.py
     context_files = item.get("context_files") or []
@@ -398,9 +403,10 @@ if [[ -f "$CONFIG" ]] && command -v jq >/dev/null 2>&1; then
     CMD="${OVERRIDE//\{task\}/$TASK}"
     echo ">> [$AGENT/$MODE via override] $CMD" >&2
     log_event "start"
+    _t0=$(date +%s)
     bash -c "$CMD"
     _exit=$?
-    log_event "end" duration_s 0 exit_code "$_exit"
+    log_event "end" duration_s "$(( $(date +%s) - _t0 ))" exit_code "$_exit"
     exit $_exit
   fi
 fi

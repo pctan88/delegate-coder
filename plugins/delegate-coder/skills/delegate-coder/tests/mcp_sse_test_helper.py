@@ -401,7 +401,6 @@ def test_payload_logging():
         server_with_debug.proc.terminate()
         _, stderr_bytes = server_with_debug.proc.communicate()
         stderr_text = stderr_bytes.decode("utf-8")
-        print(f"DEBUG CAPTURED STDERR:\n{stderr_text}\n---")
 
         assert marker in stderr_text, "Did not find sensitive marker in debug log when MCP_DEBUG=1 was active"
     finally:

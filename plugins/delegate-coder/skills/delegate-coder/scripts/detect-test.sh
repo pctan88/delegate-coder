@@ -10,6 +10,32 @@ set -u
 DIR="${1:-.}"
 cd "$DIR" 2>/dev/null || exit 0
 
+# Helper to resolve python interpreter and print its test command
+emit_python_test_cmd() {
+  local py_interpreter=""
+  if [[ -x ".venv/bin/python" ]]; then
+    py_interpreter=".venv/bin/python"
+  elif [[ -x "venv/bin/python" ]]; then
+    py_interpreter="venv/bin/python"
+  elif command -v python >/dev/null 2>&1; then
+    py_interpreter="python"
+  elif command -v python3 >/dev/null 2>&1; then
+    py_interpreter="python3"
+  fi
+
+  if [[ -n "$py_interpreter" ]]; then
+    local quoted_py
+    quoted_py="$(printf '%q' "$py_interpreter")"
+    if "$py_interpreter" -c "import pytest" >/dev/null 2>&1; then
+      echo "$quoted_py -m pytest -q"
+    else
+      echo "$quoted_py -m unittest discover"
+    fi
+    return 0
+  fi
+  return 1
+}
+
 # 1. Node — package.json with a real "test" script. Skip npm's default
 # placeholder, whose distinctive phrase is "no test specified".
 if [[ -f package.json ]] && grep -Eq '"test"[[:space:]]*:' package.json; then
@@ -23,24 +49,7 @@ fi
 if [[ -f pytest.ini ]] \
    || { [[ -f pyproject.toml ]] && grep -q pytest pyproject.toml 2>/dev/null; } \
    || [[ -d tests ]]; then
-  py_interpreter=""
-  if [[ -x ".venv/bin/python" ]]; then
-    py_interpreter=".venv/bin/python"
-  elif [[ -x "venv/bin/python" ]]; then
-    py_interpreter="venv/bin/python"
-  elif command -v python >/dev/null 2>&1; then
-    py_interpreter="python"
-  elif command -v python3 >/dev/null 2>&1; then
-    py_interpreter="python3"
-  fi
-
-  if [[ -n "$py_interpreter" ]]; then
-    quoted_py="$(printf '%q' "$py_interpreter")"
-    if "$py_interpreter" -c "import pytest" >/dev/null 2>&1; then
-      echo "$quoted_py -m pytest -q"
-    else
-      echo "$quoted_py -m unittest discover"
-    fi
+  if emit_python_test_cmd; then
     exit 0
   fi
 fi
@@ -61,6 +70,21 @@ fi
 if [[ -f Makefile ]] && grep -Eq '^test:' Makefile; then
   echo "make test"
   exit 0
+fi
+
+# 6. Python loose tests at root fallback (keep last)
+has_loose_tests=false
+for f in test_*.py *_test.py; do
+  if [[ -f "$f" ]]; then
+    has_loose_tests=true
+    break
+  fi
+done
+
+if $has_loose_tests; then
+  if emit_python_test_cmd; then
+    exit 0
+  fi
 fi
 
 # Nothing recognized — print nothing; the caller asks the user.

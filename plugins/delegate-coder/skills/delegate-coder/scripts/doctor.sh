@@ -44,6 +44,8 @@ json_get() { # json_get <key> <file> — crude extractor, avoids jq dependency
 config_valid=false
 config_agent=""
 config_test_cmd=""
+override_read=""
+override_exec=""
 
 check_config() {
   if [[ ! -f "$CONFIG" ]]; then
@@ -73,6 +75,21 @@ check_config() {
   config_agent="$(json_get agent "$CONFIG")"
   config_test_cmd="$(json_get test_command "$CONFIG")"
 
+  # Extract overrides if present
+  if [[ -f "$CONFIG" ]]; then
+    if command -v jq >/dev/null 2>&1; then
+      override_read="$(jq -r '.command_override.read // empty' "$CONFIG" 2>/dev/null)"
+      override_exec="$(jq -r '.command_override.exec // empty' "$CONFIG" 2>/dev/null)"
+    elif command -v python3 >/dev/null 2>&1; then
+      override_read="$(python3 -c "import json; print(json.load(open('$CONFIG')).get('command_override', {}).get('read', ''))" 2>/dev/null)"
+      override_exec="$(python3 -c "import json; print(json.load(open('$CONFIG')).get('command_override', {}).get('exec', ''))" 2>/dev/null)"
+    else
+      # fallback crude regex
+      override_read="$(grep -o '"read"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG" 2>/dev/null | head -n1 | sed 's/.*:[[:space:]]*"\(.*\)"/\1/')"
+      override_exec="$(grep -o '"exec"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG" 2>/dev/null | head -n1 | sed 's/.*:[[:space:]]*"\(.*\)"/\1/')"
+    fi
+  fi
+
   if [[ -n "$config_test_cmd" ]]; then
     ok "test_command: $config_test_cmd"; echo ""
   else
@@ -83,6 +100,61 @@ check_config() {
 # ── per-agent checks ──
 check_agent() {
   local agent="$1"
+
+  # Check if this agent is the configured one AND has overrides
+  local has_override=false
+  if [[ "$agent" == "${DELEGATE_AGENT:-$config_agent}" ]] && \
+     [[ -n "$override_read" || -n "$override_exec" ]]; then
+    has_override=true
+  fi
+
+  if $has_override; then
+    printf "%-12s" "$agent:"
+
+    local override_desc=""
+    local overrides_valid=true
+
+    if [[ -n "$override_read" ]]; then
+      local first_token
+      read -r first_token _ <<< "$override_read"
+      if command -v "$first_token" >/dev/null 2>&1; then
+        override_desc="read: '$override_read'"
+      else
+        override_desc="read: '$override_read' (missing '$first_token')"
+        overrides_valid=false
+      fi
+    fi
+
+    if [[ -n "$override_exec" ]]; then
+      local first_token
+      read -r first_token _ <<< "$override_exec"
+      local exec_desc
+      if command -v "$first_token" >/dev/null 2>&1; then
+        exec_desc="exec: '$override_exec'"
+      else
+        exec_desc="exec: '$override_exec' (missing '$first_token')"
+        overrides_valid=false
+      fi
+
+      if [[ -n "$override_desc" ]]; then
+        override_desc="$override_desc, $exec_desc"
+      else
+        override_desc="$exec_desc"
+      fi
+    fi
+
+    if $overrides_valid; then
+      ok "$override_desc"
+      printf "  "
+      ok "authenticated"
+      echo ""
+      return 0
+    else
+      fail "$override_desc"
+      echo ""
+      return 1
+    fi
+  fi
 
   printf "%-12s" "$agent:"
 
@@ -164,6 +236,17 @@ echo ""
 # Determine which agents to check
 if $CHECK_ALL; then
   agents_to_check=("${KNOWN_AGENTS[@]}")
+  target="${DELEGATE_AGENT:-$config_agent}"
+  if [[ -n "$target" ]]; then
+    # check if target is already in KNOWN_AGENTS
+    in_known=false
+    for a in "${KNOWN_AGENTS[@]}"; do
+      [[ "$a" == "$target" ]] && in_known=true
+    done
+    if ! $in_known; then
+      agents_to_check+=("$target")
+    fi
+  fi
 else
   # configured agent only
   target="${DELEGATE_AGENT:-$config_agent}"
