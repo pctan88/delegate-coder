@@ -95,6 +95,33 @@ This repository exposes a standard Model Context Protocol (MCP) stdio wrapper (`
 }
 ```
 
+### HTTP/SSE (Streamable HTTP) Mode
+
+You can also run the MCP server in background daemon mode (using tools like `pm2`) by providing the `--port <port>` flag:
+```bash
+python3 mcp_server.py --port 8001
+```
+
+**Client Configuration for SSE (`mcp_config.json`):**
+```json
+{
+  "mcpServers": {
+    "delegate-coder": {
+      "serverUrl": "http://127.0.0.1:8001/sse"
+    }
+  }
+}
+```
+
+> [!CAUTION]
+> **Security Warning:** Running the server in HTTP/SSE mode exposes command execution capabilities and must **never** be exposed beyond `localhost` (127.0.0.1).
+
+**Cross-Origin, Authentication, & Concurrency Hardening:**
+- **CORS Origin Check**: The server strictly validates incoming requests containing an `Origin` header. Requests from any non-local hostname (not matching `127.0.0.1` or `localhost`) are immediately rejected with `403 Forbidden` to prevent drive-by attacks from arbitrary websites in your browser.
+- **Shared-Secret Authentication**: For additional security, you can enforce token-based access by setting the `MCP_AUTH_TOKEN` environment variable on the server process. If set, ALL requests (including `/sse`, `/message`, and root `/` stateless POST paths) must carry a matching `Authorization: Bearer <token>` header, otherwise they are rejected with `401 Unauthorized`.
+- **Payload Logging (`MCP_DEBUG`)**: By default, verbose request body and response payload logging to stderr is disabled to prevent leaking file/contract contents into daemon logs (e.g. `pm2` logs). Set the environment variable `MCP_DEBUG=1` to enable verbose logging for debugging purposes.
+- **Concurrency Locks & Timeout (`MCP_BUSY_TIMEOUT`)**: Parallel tool executions targeting the same project workspace directory are serialized using in-process locks. You can configure the maximum queue duration (in seconds) by setting `MCP_BUSY_TIMEOUT` (defaults to `60` seconds). If a request cannot acquire the project lock within this time, it returns an exit code of `111` with the error `mcp_server: project is busy with another delegated task; retry later` so that the orchestrator or client can retry later.
+
 **Exposed Tools:**
 - `delegate_contract`: Run a single-file Task Contract using a local Ollama model (supporting syntax preflight, transactional rollback, and auto-retry).
 - `delegate_exec`: Route general execution/implementation tasks to the configured secondary worker CLI (e.g., `mimo`, `aider`, `gemini`, `qwen`, `opencode`).

@@ -9,6 +9,13 @@ import json
 import subprocess
 import os
 import pathlib
+import argparse
+import urllib.parse
+import uuid
+import queue
+import socketserver
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Setup absolute paths relative to repository root
 ROOT_DIR = pathlib.Path(__file__).parent.resolve()
@@ -17,26 +24,42 @@ DOCTOR_SH = ROOT_DIR / "plugins" / "delegate-coder" / "skills" / "delegate-coder
 
 SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05"]
 
+PROJECT_LOCKS = {}
+PROJECT_LOCKS_LOCK = threading.Lock()
+
 def run_command(args, cwd=None):
     try:
         env = os.environ.copy()
         # Default to the process's active CWD (which matches the client's active project workspace)
         target_cwd = cwd if cwd is not None else os.getcwd()
-        if cwd is not None:
-            p = pathlib.Path(cwd).resolve(strict=True)
-            if not p.is_dir():
-                raise NotADirectoryError(f"project_root is not a directory: {cwd}")
-            target_cwd = str(p)
+        resolved_path = str(pathlib.Path(target_cwd).resolve(strict=True))
 
-        res = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            cwd=target_cwd,
-            env=env,
-            timeout=1200  # 20-minute execution timeout to prevent hung loops
-        )
-        return res.returncode, res.stdout, res.stderr
+        with PROJECT_LOCKS_LOCK:
+            if resolved_path not in PROJECT_LOCKS:
+                PROJECT_LOCKS[resolved_path] = threading.Lock()
+            lock = PROJECT_LOCKS[resolved_path]
+
+        try:
+            busy_timeout = int(os.environ.get("MCP_BUSY_TIMEOUT", "60"))
+        except ValueError:
+            busy_timeout = 60
+
+        acquired = lock.acquire(timeout=busy_timeout)
+        if not acquired:
+            return 111, "", "mcp_server: project is busy with another delegated task; retry later"
+
+        try:
+            res = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                cwd=resolved_path,
+                env=env,
+                timeout=1200  # 20-minute execution timeout to prevent hung loops
+            )
+            return res.returncode, res.stdout, res.stderr
+        finally:
+            lock.release()
     except subprocess.TimeoutExpired:
         return 124, "", "mcp_server: command execution timed out (20-minute limit exceeded)"
     except Exception as e:
@@ -281,31 +304,296 @@ def handle_request(req):
             
         else:
             return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Unknown tool: {name}"}}
-            
+
     else:
         # Handshake notifications or initialize notifications do not expect replies
         if req_id is not None:
             return {"jsonrpc": "2.0", "id": req_id, "result": {}}
         return None
 
-def main():
-    sys.stderr.write("delegate-coder-mcp started\n")
-    sys.stderr.flush()
-    while True:
-        try:
-            line = sys.stdin.readline()
-            if not line:
-                break
-            req = json.loads(line)
-            resp = handle_request(req)
-            if resp is not None:
-                sys.stdout.write(json.dumps(resp) + "\n")
-                sys.stdout.flush()
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            sys.stderr.write(f"Error handling request: {e}\n")
+# --- HTTP/SSE server implementation ---
+CLIENTS = {}
+CLIENTS_LOCK = threading.Lock()
+
+class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
+class MCPSSEHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format, *args):
+        # Redirect request logs to stderr to keep stdout completely clean for JSON-RPC
+        sys.stderr.write(f"mcp_server [SSE]: {format % args}\n")
+        sys.stderr.flush()
+
+    def send_http_error(self, code, message):
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Connection", "close")
+        origin = self.headers.get("Origin")
+        if origin and self.is_origin_allowed():
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.end_headers()
+        self.wfile.write(message.encode("utf-8"))
+        self.close_connection = True
+
+    def is_origin_allowed(self):
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            try:
+                parsed = urllib.parse.urlparse(origin)
+                if parsed.scheme not in ("http", "https"):
+                    return False
+                hostname = (parsed.hostname or "").lower()
+                if hostname not in ("127.0.0.1", "localhost"):
+                    return False
+            except Exception:
+                return False
+        return True
+
+    def is_authorized(self):
+        auth_token = os.environ.get("MCP_AUTH_TOKEN")
+        if not auth_token:
+            return True
+        auth_header = self.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return False
+        token = auth_header[7:].strip()
+        return token == auth_token
+
+    def preflight_check(self):
+        if not self.is_origin_allowed():
+            self.send_http_error(403, "Forbidden: Cross-Origin request denied")
+            return False
+
+        if not self.is_authorized():
+            self.send_http_error(401, "Unauthorized: Missing or invalid Authorization token")
+            return False
+        return True
+
+    def do_OPTIONS(self):
+        if not self.is_origin_allowed():
+            self.send_response(403)
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            return
+        self.send_response(204)
+        origin = self.headers.get("Origin")
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.end_headers()
+
+    def do_DELETE(self):
+        if not self.preflight_check():
+            return
+        self.send_response(200)
+        origin = self.headers.get("Origin")
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.end_headers()
+
+    def do_GET(self):
+        if not self.preflight_check():
+            return
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/message":
+            self.send_http_error(405, "Method Not Allowed: GET /message is not supported")
+            return
+
+        if parsed.path == "/sse":
+            client_id = str(uuid.uuid4())
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            origin = self.headers.get("Origin")
+            if origin:
+                self.send_header("Access-Control-Allow-Origin", origin)
+            self.end_headers()
+
+            # Client must POST client messages to /message?client_id=client_id
+            msg = f"event: endpoint\ndata: /message?client_id={client_id}\n\n"
+            self.wfile.write(msg.encode("utf-8"))
+            self.wfile.flush()
+
+            q = queue.Queue()
+            with CLIENTS_LOCK:
+                CLIENTS[client_id] = q
+
+            sys.stderr.write(f"mcp_server [SSE]: Client connected: {client_id}\n")
             sys.stderr.flush()
+
+            try:
+                while True:
+                    try:
+                        data = q.get(timeout=2.0)
+                        if data is None:
+                            break
+                        msg = f"event: message\ndata: {json.dumps(data)}\n\n"
+                        self.wfile.write(msg.encode("utf-8"))
+                        self.wfile.flush()
+                    except queue.Empty:
+                        self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+            except Exception as e:
+                sys.stderr.write(f"mcp_server [SSE]: Error sending event to {client_id}: {e}\n")
+                sys.stderr.flush()
+            finally:
+                with CLIENTS_LOCK:
+                    CLIENTS.pop(client_id, None)
+                sys.stderr.write(f"mcp_server [SSE]: Client disconnected: {client_id}\n")
+                sys.stderr.flush()
+        else:
+            self.send_response(404)
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+
+    def do_POST(self):
+        if not self.preflight_check():
+            return
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/sse":
+            self.send_http_error(405, "Method Not Allowed: POST /sse is not supported")
+            return
+
+        content_length_str = self.headers.get("Content-Length")
+        if content_length_str is None:
+            self.send_http_error(400, "Bad Request: Missing Content-Length header")
+            return
+        try:
+            content_length = int(content_length_str)
+        except ValueError:
+            self.send_http_error(400, "Bad Request: Invalid Content-Length header")
+            return
+
+        if content_length > 1048576:  # 1MB
+            self.send_http_error(413, "Payload Too Large: Limit is 1MB")
+            return
+
+        try:
+            body = self.rfile.read(content_length).decode("utf-8")
+        except Exception as e:
+            self.send_http_error(400, f"Bad Request: Error reading body: {e}")
+            return
+
+        if os.environ.get("MCP_DEBUG") == "1":
+            sys.stderr.write(f"mcp_server [SSE]: POST {self.path} body: {body}\n")
+            sys.stderr.flush()
+
+        try:
+            req = json.loads(body)
+        except Exception:
+            self.send_http_error(400, "Bad Request: Malformed JSON")
+            return
+
+        query = urllib.parse.parse_qs(parsed.query)
+        client_id = query.get("client_id", [None])[0]
+
+        if parsed.path == "/message":
+            with CLIENTS_LOCK:
+                is_active = client_id and client_id in CLIENTS
+            if not is_active:
+                self.send_http_error(404, "Not Found: Client session not found or inactive")
+                return
+
+        resp = handle_request(req)
+
+        with CLIENTS_LOCK:
+            use_sse = client_id and client_id in CLIENTS
+
+        if use_sse:
+            with CLIENTS_LOCK:
+                q = CLIENTS.get(client_id)
+            if q is not None:
+                q.put(resp)
+            self.send_response(202)
+            origin = self.headers.get("Origin")
+            if origin:
+                self.send_header("Access-Control-Allow-Origin", origin)
+            self.end_headers()
+            if os.environ.get("MCP_DEBUG") == "1":
+                sys.stderr.write(f"mcp_server [SSE]: Queued response for client {client_id}\n")
+                sys.stderr.flush()
+        else:
+            if resp is not None:
+                accept = self.headers.get("Accept", "")
+                is_event_stream = "text/event-stream" in accept or parsed.path == "/sse"
+
+                self.send_response(200)
+                origin = self.headers.get("Origin")
+                if origin:
+                    self.send_header("Access-Control-Allow-Origin", origin)
+
+                if is_event_stream:
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Connection", "keep-alive")
+                    self.end_headers()
+                    resp_str = f"event: message\ndata: {json.dumps(resp)}\n\n"
+                    self.wfile.write(resp_str.encode("utf-8"))
+                    if os.environ.get("MCP_DEBUG") == "1":
+                        sys.stderr.write(f"mcp_server [SSE]: Responded via Streamable HTTP: {resp_str}\n")
+                        sys.stderr.flush()
+                else:
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    resp_str = json.dumps(resp)
+                    self.wfile.write(resp_str.encode("utf-8"))
+                    if os.environ.get("MCP_DEBUG") == "1":
+                        sys.stderr.write(f"mcp_server [SSE]: Responded directly in JSON body: {resp_str}\n")
+                        sys.stderr.flush()
+            else:
+                self.send_response(202)
+                origin = self.headers.get("Origin")
+                if origin:
+                    self.send_header("Access-Control-Allow-Origin", origin)
+                self.end_headers()
+                if os.environ.get("MCP_DEBUG") == "1":
+                    sys.stderr.write("mcp_server [SSE]: Response: 202 Accepted\n")
+                    sys.stderr.flush()
+
+def run_sse_server(port):
+    sys.stderr.write(f"mcp_server [SSE]: Starting HTTP/SSE server on port {port}...\n")
+    sys.stderr.flush()
+    server = ThreadingHTTPServer(("127.0.0.1", port), MCPSSEHandler)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        sys.stderr.write("mcp_server [SSE]: Server stopped.\n")
+        sys.stderr.flush()
+
+def main():
+    parser = argparse.ArgumentParser(description="delegate-coder MCP Server")
+    parser.add_argument("--port", type=int, help="Run as an HTTP/SSE server on the specified port instead of stdio")
+    args_parsed = parser.parse_args()
+
+    if args_parsed.port:
+        run_sse_server(args_parsed.port)
+    else:
+        sys.stderr.write("delegate-coder-mcp started in stdio mode\n")
+        sys.stderr.flush()
+        while True:
+            try:
+                line = sys.stdin.readline()
+                if not line:
+                    break
+                req = json.loads(line)
+                resp = handle_request(req)
+                if resp is not None:
+                    sys.stdout.write(json.dumps(resp) + "\n")
+                    sys.stdout.flush()
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                sys.stderr.write(f"Error handling request: {e}\n")
+                sys.stderr.flush()
 
 if __name__ == "__main__":
     main()

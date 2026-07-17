@@ -28,3 +28,7 @@ benchmark/results/
 
 # Local archives
 _archive/
+*.patch
+.delegate-coder/
+NEXT_STEPS.md
+scratch/
