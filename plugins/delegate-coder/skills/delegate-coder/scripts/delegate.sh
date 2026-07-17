@@ -401,7 +401,9 @@ if [[ -f "$CONFIG" ]] && command -v jq >/dev/null 2>&1; then
   OVERRIDE="$(jq -r ".command_override.${MODE} // empty" "$CONFIG" 2>/dev/null)"
   if [[ -n "$OVERRIDE" ]]; then
     export DELEGATE_TASK="$TASK"
-    CMD="${OVERRIDE//\{task\}/\"\$DELEGATE_TASK\"}"
+    CMD="${OVERRIDE//\'\{task\}\'/\"\$DELEGATE_TASK\"}"
+    CMD="${CMD//\"\{task\}\"/\"\$DELEGATE_TASK\"}"
+    CMD="${CMD//\{task\}/\"\$DELEGATE_TASK\"}"
     echo ">> [$AGENT/$MODE via override] $CMD" >&2
     log_event "start"
     _t0=$(date +%s)

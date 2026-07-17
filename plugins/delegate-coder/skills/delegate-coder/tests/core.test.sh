@@ -373,16 +373,77 @@ cat > "$CASE_DIR/.claude/delegate-coder.json" <<JSON
 }
 JSON
 
-# Run dispatch with a task containing quotes, apostrophe, \$(echo pwned), backticks
-injection_task="task's \"quotes\" \$(echo pwned) \`echo backticks\`"
+# Run dispatch with a task containing quotes, apostrophe, \$(touch pwned), backticks
+injection_task="task's \"quotes\" \$(touch pwned) \`touch pwned_backtick\`"
 run_dispatch read "$injection_task" >/dev/null 2>&1 || fail "injection test run failed"
 
 # Verify that:
 # 1. No command execution side effects occurred
+[[ ! -f "$CASE_DIR/pwned" ]] || fail "injection occurred: file pwned created"
+[[ ! -f "$CASE_DIR/pwned_backtick" ]] || fail "injection occurred: file pwned_backtick created"
 # 2. The argument reached the worker exactly byte-identical
 [[ -f "$CASE_DIR/worker_arg1" ]] || fail "worker did not receive argument"
 arg_received="$(cat "$CASE_DIR/worker_arg1")"
 [[ "$arg_received" == "$injection_task" ]] || fail "argument corrupted: expected '$injection_task' but got '$arg_received'"
 pass "command_override handles quotes and prevents injections safely"
+
+# ── delegate.sh: command_override back-compat for legacy quoted placeholders ──
+setup_case override_quoted_legacy_sq
+mkdir -p "$CASE_DIR/.claude"
+mkdir -p "$CASE_DIR/bin"
+
+# Write a fake worker script that records its arguments byte-for-byte
+cat > "$CASE_DIR/bin/fake_worker.sh" <<EOF
+#!/usr/bin/env bash
+printf "%s" "\$1" > "$CASE_DIR/worker_arg1"
+EOF
+chmod +x "$CASE_DIR/bin/fake_worker.sh"
+
+# Write legacy config specifying command_override with '{task}' (single-quoted)
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<JSON
+{
+  "agent": "custom",
+  "command_override": {
+    "read": "fake_worker.sh '{task}'"
+  }
+}
+JSON
+
+legacy_task="legacy single quoted task's content"
+run_dispatch read "$legacy_task" >/dev/null 2>&1 || fail "legacy single quoted run failed"
+
+[[ -f "$CASE_DIR/worker_arg1" ]] || fail "legacy worker did not receive argument"
+arg_received="$(cat "$CASE_DIR/worker_arg1")"
+[[ "$arg_received" == "$legacy_task" ]] || fail "legacy single-quoted output corrupted: expected '$legacy_task' but got '$arg_received'"
+pass "command_override handles legacy single-quoted '{task}' correctly"
+
+setup_case override_quoted_legacy_dq
+mkdir -p "$CASE_DIR/.claude"
+mkdir -p "$CASE_DIR/bin"
+
+# Write a fake worker script that records its arguments byte-for-byte
+cat > "$CASE_DIR/bin/fake_worker.sh" <<EOF
+#!/usr/bin/env bash
+printf "%s" "\$1" > "$CASE_DIR/worker_arg1"
+EOF
+chmod +x "$CASE_DIR/bin/fake_worker.sh"
+
+# Write legacy config specifying command_override with "{task}" (double-quoted)
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<JSON
+{
+  "agent": "custom",
+  "command_override": {
+    "read": "fake_worker.sh \"{task}\""
+  }
+}
+JSON
+
+legacy_task="legacy double quoted task's content"
+run_dispatch read "$legacy_task" >/dev/null 2>&1 || fail "legacy double quoted run failed"
+
+[[ -f "$CASE_DIR/worker_arg1" ]] || fail "legacy worker did not receive argument"
+arg_received="$(cat "$CASE_DIR/worker_arg1")"
+[[ "$arg_received" == "$legacy_task" ]] || fail "legacy double-quoted output corrupted: expected '$legacy_task' but got '$arg_received'"
+pass "command_override handles legacy double-quoted \"{task}\" correctly"
 
 echo "# all $PASS checks passed"
