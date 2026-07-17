@@ -456,9 +456,6 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
         if not self.preflight_check():
             return
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path == "/sse":
-            self.send_http_error(405, "Method Not Allowed: POST /sse is not supported")
-            return
 
         content_length_str = self.headers.get("Content-Length")
         if content_length_str is None:
@@ -489,6 +486,11 @@ class MCPSSEHandler(BaseHTTPRequestHandler):
         except Exception:
             self.send_http_error(400, "Bad Request: Malformed JSON")
             return
+
+        if parsed.path == "/sse":
+            if not isinstance(req, dict) or "jsonrpc" not in req or "method" not in req:
+                self.send_http_error(405, "Method Not Allowed: POST /sse is not supported for arbitrary payloads")
+                return
 
         query = urllib.parse.parse_qs(parsed.query)
         client_id = query.get("client_id", [None])[0]
