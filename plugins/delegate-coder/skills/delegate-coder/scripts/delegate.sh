@@ -311,7 +311,7 @@ if [[ "$MODE" == "contract" ]]; then
   cat "$CONTRACT_REPORT"
   CONTRACT_STATUS="$(report_value Status "$CONTRACT_REPORT")"
   case "$CONTRACT_STATUS" in
-    PASS|NOOP|FAIL) ;;
+    PASS|NOOP|FAIL|PREFLIGHT_FAIL|TEST_FAIL) ;;
     *) CONTRACT_STATUS="ERROR" ;;
   esac
   CONTRACT_RETRIES="$(report_value Retries "$CONTRACT_REPORT")"

@@ -41,6 +41,10 @@ RESTORED=0
 REPORT_EMITTED=0
 FINAL_STATUS="FAIL"
 RETRY_COUNT=0
+NOOP_CANDIDATE_PATH=""
+PREFLIGHT_FAIL_COUNT=0
+LAST_FAILURE_TYPE=""
+HINT_MESSAGE=""
 ERROR_MESSAGE=""
 OUTSIDE_CHANGES=""
 BASE_WORKTREE_STATUS=""
@@ -812,10 +816,12 @@ run_preflight() {
 }
 
 run_tests() {
+  LAST_FAILURE_TYPE=""
   # Phase 2: Fail-Fast Syntax Preflight
   run_preflight
   local preflight_rc=$?
   if [[ "$preflight_rc" -ne 0 ]]; then
+    LAST_FAILURE_TYPE="PREFLIGHT"
     return "$preflight_rc"
   fi
 
@@ -828,9 +834,13 @@ run_tests() {
     (cd "$ROOT_DIR" && perl -e 'alarm shift; exec @ARGV' "$TEST_TIMEOUT" bash -c "$TEST_COMMAND") > "$TEST_LOG" 2>&1
   else
     ERROR_MESSAGE="no bounded verification mechanism available"
+    LAST_FAILURE_TYPE="FAIL"
     return 1
   fi
   TEST_EXIT=$?
+  if [[ "$TEST_EXIT" -ne 0 ]]; then
+    LAST_FAILURE_TYPE="TEST"
+  fi
   return "$TEST_EXIT"
 }
 
@@ -867,6 +877,8 @@ emit_report() {
   if [[ "$FINAL_STATUS" == PASS ]]; then
     if cmp -s "$ORIGINAL_FILE" "$CANDIDATE_FILE"; then
       FINAL_STATUS=NOOP
+      NOOP_CANDIDATE_PATH="$(mktemp "${TMPDIR:-/tmp}/delegate-coder-candidate.XXXXXX")"
+      cp "$CANDIDATE_FILE" "$NOOP_CANDIDATE_PATH"
       if ! restore_worktree; then
         FINAL_STATUS=FAIL
         ERROR_MESSAGE="could not restore unchanged candidate"
@@ -892,7 +904,9 @@ emit_report() {
   printf -- '- Branch: %s\n' "$BRANCH_NAME"
   printf -- '- Restored: %s\n' "$([[ "$RESTORED" -eq 1 ]] && echo true || echo false)"
   printf -- '- Candidate accepted: %s\n' "$([[ "$ACCEPTED" -eq 1 ]] && echo true || echo false)"
+  [[ -n "$NOOP_CANDIDATE_PATH" ]] && printf -- '- Worker candidate saved to: %s\n' "$NOOP_CANDIDATE_PATH"
   [[ -n "$ERROR_MESSAGE" ]] && printf -- '- Error: %s\n' "${ERROR_MESSAGE//$'\n'/ }"
+  [[ -n "${HINT_MESSAGE:-}" ]] && printf -- '- Hint: %s\n' "${HINT_MESSAGE//$'\n'/ }"
   [[ -n "$OUTSIDE_CHANGES" ]] && printf -- '- Outside changes: %s\n' "${OUTSIDE_CHANGES//$'\n'/, }"
   if [[ -f "$METRICS_FILE" ]]; then
     while IFS=$'\t' read -r metric value; do
@@ -942,13 +956,36 @@ stage_candidate || fail "could not stage generated candidate"
 if run_tests; then
   FINAL_STATUS=PASS
 else
-  [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="verification command failed"
+  if [[ "$LAST_FAILURE_TYPE" == "PREFLIGHT" ]]; then
+    PREFLIGHT_FAIL_COUNT=$((PREFLIGHT_FAIL_COUNT + 1))
+    FINAL_STATUS=PREFLIGHT_FAIL
+    [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="syntax preflight check failed"
+  elif [[ "$LAST_FAILURE_TYPE" == "TEST" ]]; then
+    FINAL_STATUS=TEST_FAIL
+    [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="verification command failed"
+  else
+    FINAL_STATUS=FAIL
+  fi
+
   echo "contract-router: verification failed; attempting one correction" >&2
   cp "$TEST_LOG" "$WORK_DIR/failure.log" 2>/dev/null || true
   RETRY_COUNT=1
   if generate_file "$WORK_DIR/failure.log"; then
     if stage_candidate; then
-      if run_tests; then FINAL_STATUS=PASS; else FINAL_STATUS=FAIL; fi
+      if run_tests; then
+        FINAL_STATUS=PASS
+      else
+        if [[ "$LAST_FAILURE_TYPE" == "PREFLIGHT" ]]; then
+          PREFLIGHT_FAIL_COUNT=$((PREFLIGHT_FAIL_COUNT + 1))
+          FINAL_STATUS=PREFLIGHT_FAIL
+          [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="syntax preflight check failed"
+        elif [[ "$LAST_FAILURE_TYPE" == "TEST" ]]; then
+          FINAL_STATUS=TEST_FAIL
+          [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="verification command failed"
+        else
+          FINAL_STATUS=FAIL
+        fi
+      fi
     else
       FINAL_STATUS=FAIL
       ERROR_MESSAGE="could not stage corrected candidate"
@@ -956,6 +993,10 @@ else
   else
     FINAL_STATUS=FAIL
   fi
+fi
+
+if [[ "$PREFLIGHT_FAIL_COUNT" -ge 2 ]]; then
+  HINT_MESSAGE="Worker produced syntactically invalid output twice; local models often break on regex/quote-escaping in whole-file generation. Recommend implementing this file manually."
 fi
 
 AFTER_OTHER_STATUS="$(status_without_target "$TARGET_FILE")"

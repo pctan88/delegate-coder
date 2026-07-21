@@ -84,6 +84,7 @@ if [[ "$mode" == claude-new ]]; then printf 'changed\n' > .claude/unexpected; fi
 if [[ "$mode" == retry && "$count" -eq 1 ]]; then content=bad; fi
 if [[ "$mode" == syntax_error && "$count" -eq 1 ]]; then content="invalid syntax python code"; fi
 if [[ "$mode" == syntax_error && "$count" -eq 2 ]]; then content="print('good')"; fi
+if [[ "$mode" == syntax_error_twice ]]; then content="invalid syntax python code (def broken:"; fi
 if [[ "$mode" == bad ]]; then content=bad; fi
 if [[ "$mode" == batch-fail && "$count" -le 2 ]]; then content=bad; fi
 if [[ "$mode" == batch-later && "$count" -ge 2 ]]; then content=bad; fi
@@ -287,7 +288,11 @@ setup_case noop
 make_contract target.txt "true" "$CASE_DIR/contract.json"
 CURL_MODE=noop run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "noop contract should pass"
 contains "$STDOUT_PATH" '- Status: NOOP' "unchanged output should be reported as NOOP"
-pass "empty-diff detection"
+saved_noop_path="$(sed -n 's/^- Worker candidate saved to: //p' "$STDOUT_PATH" | head -n1)"
+[[ -n "$saved_noop_path" && -f "$saved_noop_path" ]] || fail "noop report should name an existing candidate file"
+[[ "$(cat "$saved_noop_path")" == original ]] || fail "saved candidate file contents should match model output"
+rm -f "$saved_noop_path"
+pass "empty-diff detection and candidate saving"
 
 # A second failure is returned without a third generation attempt.
 setup_case failed
@@ -300,8 +305,24 @@ set -e
 [[ "$(cat "$CURL_COUNT_FILE_PATH")" == 2 ]] || fail "router must not make a third generation"
 [[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "failed verification must restore the existing target"
 contains "$STDOUT_PATH" '- Restored: true' "failed verification should report restoration"
-contains "$STDOUT_PATH" '- Status: FAIL' "failed report status"
+contains "$STDOUT_PATH" '- Status: TEST_FAIL' "failed report status"
 pass "retry limit and failed report"
+
+# Two syntax preflight failures trigger PREFLIGHT_FAIL status and hint text.
+setup_case syntax-preflight-twice
+printf 'def foo(): pass\n' > "$CASE_DIR/target.py"
+git -C "$CASE_DIR" add target.py
+git -C "$CASE_DIR" commit -qm target-py
+make_contract target.py "python3 target.py" "$CASE_DIR/contract.json"
+set +e
+CURL_MODE=syntax_error_twice run_dispatch "$(cat "$CASE_DIR/contract.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "repeated syntax preflight failure should return nonzero"
+contains "$STDOUT_PATH" '- Status: PREFLIGHT_FAIL' "repeated syntax failure status"
+contains "$STDOUT_PATH" 'Worker produced syntactically invalid output twice; local models often break on regex/quote-escaping in whole-file generation. Recommend implementing this file manually.' "repeated syntax failure hint text"
+[[ "$(cat "$CASE_DIR/target.py")" == "def foo(): pass" ]] || fail "syntax failure must restore existing target"
+pass "repeated syntax preflight failure hint and status"
 
 # A failed new-file contract removes the attempted file transactionally.
 setup_case newfile-failed
