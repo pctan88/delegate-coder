@@ -12,7 +12,7 @@ This is not just a CLI wrapper. The skill encodes a **trust framework** for dele
 
 1. **Precise spec handoff** — Claude writes exact scope, constraints, and verification criteria before delegating. Vague handoffs are the #1 cause of wasted cycles.
 2. **Git branch isolation** — every exec task runs on a `delegate/*` branch. Nothing touches your working state.
-3. **Cheap, deterministic verification** — results are verified by `git diff --stat` + your test suite, not by Claude re-reading code. Diffs can't lie; summaries can.
+3. **Cheap, deterministic verification** — results are verified by `git diff --stat` + your test suite, not by Claude re-reading code. The worker's self-reported "I ran the tests" is never trusted; orchestrator/independent verification is mandatory. Diffs can't lie; summaries can.
 4. **Read-only modes where supported** — analysis tasks use the worker's read-only mode (MiMo `plan`, Codex `read-only` sandbox) for zero-risk delegation.
 5. **Escalation rule** — two failures on the same task and Claude stops delegating it. No silent retry loops eating your savings.
 6. **Safe permissions guidance** — granular allow/deny config instead of blanket `--dangerously-skip-permissions` / `--yolo`.
