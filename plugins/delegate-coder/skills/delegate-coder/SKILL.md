@@ -39,6 +39,7 @@ Anything ambiguous, architecture-defining, or security-sensitive: do it yourself
 
 Routing heuristics for contract mode:
 - If the task is "mirror/adapt an existing file," ALWAYS pass the reference via `context_files` — this is the strongest predictor of success.
+  - When delegating TEST generation (or any file that must follow a strict structural skeleton), include one existing passing file of the same kind from this repo as an additional `context_files` entry — e.g. a working `*_test.dart` as a structural template. This is especially important for small/simple single-method targets: local models otherwise drop into "sanity-check mode" (emitting bare `assert()` calls with no test-framework scaffold) instead of writing a proper test suite. In dogfooding this converted every such failure to a first-try pass. Prefer a small, clean template file (well under the 64KB context cap).
 - Do NOT route files whose core work is regex construction or string/quote-escaping to contract mode — implement those yourself; the local model reliably corrupts them.
 
 ## Step 3: Write the spec and delegate
