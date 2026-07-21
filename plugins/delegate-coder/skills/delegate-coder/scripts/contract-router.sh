@@ -361,6 +361,19 @@ snapshot_target() {
   TARGET_DIR="$(dirname "$TARGET_FILE")"
   TARGET_NAME="$(basename "$TARGET_FILE")"
   TARGET_PATH="$ROOT_DIR/$TARGET_FILE"
+  if [[ ! -d "$ROOT_DIR/$TARGET_DIR" ]]; then
+    python3 - "$ROOT_DIR" "$TARGET_DIR" <<'PY' || fail "target_file resolves outside the repository: $TARGET_FILE"
+import pathlib, sys
+root = pathlib.Path(sys.argv[1]).resolve()
+try:
+    target_dir = (root / sys.argv[2]).resolve(strict=False)
+except Exception:
+    sys.exit(1)
+if target_dir != root and root not in target_dir.parents:
+    sys.exit(1)
+PY
+    mkdir -p "$ROOT_DIR/$TARGET_DIR" 2>/dev/null || fail "could not create target directory: $TARGET_DIR"
+  fi
   TARGET_DIR_REAL="$(cd "$ROOT_DIR/$TARGET_DIR" 2>/dev/null && pwd -P)" || fail "target directory does not exist: $TARGET_DIR"
   case "$TARGET_DIR_REAL/$TARGET_NAME" in
     "$ROOT_DIR"/*) ;;
@@ -840,6 +853,9 @@ run_tests() {
   TEST_EXIT=$?
   if [[ "$TEST_EXIT" -ne 0 ]]; then
     LAST_FAILURE_TYPE="TEST"
+    if [[ "$TEST_EXIT" -eq 127 ]]; then
+      HINT_MESSAGE="verification command binary not found (exit code 127; check PATH or use absolute path in test_command)"
+    fi
   fi
   return "$TEST_EXIT"
 }
@@ -877,8 +893,10 @@ emit_report() {
   if [[ "$FINAL_STATUS" == PASS ]]; then
     if cmp -s "$ORIGINAL_FILE" "$CANDIDATE_FILE"; then
       FINAL_STATUS=NOOP
-      NOOP_CANDIDATE_PATH="$(mktemp "${TMPDIR:-/tmp}/delegate-coder-candidate.XXXXXX")"
-      cp "$CANDIDATE_FILE" "$NOOP_CANDIDATE_PATH"
+      if [[ -s "$CANDIDATE_FILE" && -z "$NOOP_CANDIDATE_PATH" ]]; then
+        NOOP_CANDIDATE_PATH="$(mktemp "${TMPDIR:-/tmp}/delegate-coder-candidate.XXXXXX")"
+        cp "$CANDIDATE_FILE" "$NOOP_CANDIDATE_PATH"
+      fi
       if ! restore_worktree; then
         FINAL_STATUS=FAIL
         ERROR_MESSAGE="could not restore unchanged candidate"
@@ -893,8 +911,14 @@ emit_report() {
         STAGED=0
       fi
     fi
-  elif [[ "$SNAPSHOT_READY" -eq 1 ]] && worktree_needs_restore; then
-    restore_worktree || ERROR_MESSAGE="could not restore worktree after failure"
+  else
+    if [[ -s "$CANDIDATE_FILE" && -z "$NOOP_CANDIDATE_PATH" ]]; then
+      NOOP_CANDIDATE_PATH="$(mktemp "${TMPDIR:-/tmp}/delegate-coder-candidate.XXXXXX")"
+      cp "$CANDIDATE_FILE" "$NOOP_CANDIDATE_PATH"
+    fi
+    if [[ "$SNAPSHOT_READY" -eq 1 ]] && worktree_needs_restore; then
+      restore_worktree || ERROR_MESSAGE="could not restore worktree after failure"
+    fi
   fi
   build_candidate_diff
   printf '# Contract Result\n\n'
