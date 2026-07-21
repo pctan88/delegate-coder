@@ -306,6 +306,10 @@ set -e
 [[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "failed verification must restore the existing target"
 contains "$STDOUT_PATH" '- Restored: true' "failed verification should report restoration"
 contains "$STDOUT_PATH" '- Status: TEST_FAIL' "failed report status"
+candidate_path="$(sed -n 's/^- Worker candidate saved to: //p' "$STDOUT_PATH" | head -n1)"
+[[ -n "$candidate_path" && -f "$candidate_path" ]] || fail "TEST_FAIL must save candidate file to inspectable path"
+[[ "$(cat "$candidate_path")" == "bad" ]] || fail "saved candidate file content must match worker candidate output"
+rm -f "$candidate_path"
 pass "retry limit and failed report"
 
 # Two syntax preflight failures trigger PREFLIGHT_FAIL status and hint text.
@@ -322,6 +326,10 @@ set -e
 contains "$STDOUT_PATH" '- Status: PREFLIGHT_FAIL' "repeated syntax failure status"
 contains "$STDOUT_PATH" 'Worker produced syntactically invalid output twice; local models often break on regex/quote-escaping in whole-file generation. Recommend implementing this file manually.' "repeated syntax failure hint text"
 [[ "$(cat "$CASE_DIR/target.py")" == "def foo(): pass" ]] || fail "syntax failure must restore existing target"
+candidate_path="$(sed -n 's/^- Worker candidate saved to: //p' "$STDOUT_PATH" | head -n1)"
+[[ -n "$candidate_path" && -f "$candidate_path" ]] || fail "PREFLIGHT_FAIL must save candidate file to inspectable path"
+contains "$candidate_path" "invalid syntax python code" "saved candidate content must match preflight worker output"
+rm -f "$candidate_path"
 pass "repeated syntax preflight failure hint and status"
 
 # A failed new-file contract removes the attempted file transactionally.
@@ -378,6 +386,26 @@ run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "new-file contract shoul
 [[ -f "$CASE_DIR/new.txt" ]] || fail "new-file contract should create target"
 contains "$STDOUT_PATH" '- Status: PASS' "new-file report status"
 pass "new-file target support"
+
+# New target file in missing parent directory auto-creates parent directory.
+setup_case missing-parent-dir
+git -C "$CASE_DIR" rm -q target.txt
+git -C "$CASE_DIR" commit -qm remove-target
+make_contract "nested/missing/dir/target.txt" "grep -q '^good$' nested/missing/dir/target.txt" "$CASE_DIR/contract.json"
+CURL_MODE=good run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "new-file contract with missing parent dir should pass"
+[[ -f "$CASE_DIR/nested/missing/dir/target.txt" ]] || fail "missing parent directory must be auto-created for new target file"
+pass "auto-creation of missing parent directory for new target file"
+
+# Verification command exiting with 127 triggers exit code 127 hint.
+setup_case test-command-127
+make_contract target.txt "nonexistent_command_xyz_12345" "$CASE_DIR/contract.json"
+set +e
+CURL_MODE=good run_dispatch "$(cat "$CASE_DIR/contract.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "exit 127 test command should return nonzero"
+contains "$STDOUT_PATH" '- Hint: verification command binary not found (exit code 127; check PATH or use absolute path in test_command)' "exit 127 hint message"
+pass "verification command 127 exit code hint"
 
 # A top-level array runs sequentially and returns one combined report.
 setup_case batch

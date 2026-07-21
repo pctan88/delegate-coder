@@ -165,9 +165,9 @@ for index, item in enumerate(items, 1):
     target_path = root / pathlib.Path(target)
     parent = target_path.parent
     try:
-        parent_real = parent.resolve(strict=True)
-    except FileNotFoundError:
-        raise SystemExit(f"delegate: target directory does not exist: {parent.relative_to(root)}")
+        parent_real = parent.resolve(strict=False)
+    except Exception:
+        raise SystemExit(f"delegate: target_file resolves outside the repository: {target}")
     if parent_real != root and root not in parent_real.parents:
         raise SystemExit(f"delegate: target_file resolves outside the repository: {target}")
     if target_path.is_symlink():
