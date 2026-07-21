@@ -25,6 +25,10 @@ def load(path):
             value = json.loads(line)
             if not isinstance(value, dict) or not isinstance(value.get("condition"), str):
                 raise ValueError(f"{file}:{line_number}: condition is required")
+            if "label" not in value:
+                value["label"] = "unlabeled"
+            if "status" not in value:
+                value["status"] = "PASS" if value.get("success") else "FAIL"
             rows.append(value)
     return rows
 
@@ -32,35 +36,54 @@ def load(path):
 def summarize(rows):
     grouped = defaultdict(list)
     for row in rows:
-        grouped[row["condition"]].append(row)
-    result = {}
-    for condition, values in grouped.items():
+        label = row.get("label", "unlabeled")
+        grouped[(label, row["condition"])].append(row)
+
+    result = defaultdict(dict)
+    for (label, condition), values in grouped.items():
         def avg(key):
             numbers = [float(item[key]) for item in values if item.get(key) is not None]
             return statistics.mean(numbers) if numbers else None
-        result[condition] = {
+
+        status_counts = defaultdict(int)
+        for item in values:
+            status_counts[item.get("status", "UNKNOWN")] += 1
+
+        result[label][condition] = {
             "n": len(values),
             "success_rate": statistics.mean(bool(item.get("success")) for item in values),
             "retry_rate": statistics.mean((int(item.get("retries", item.get("retry_count", 0))) > 0) for item in values),
+            "status_counts": dict(status_counts),
             **{key: avg(key) for key in METRICS},
         }
-    return result
+    return dict(result)
 
 
 def render(rows):
     summary = summarize(rows)
-    lines = ["Condition  n  Success  Retry  Prompt-eval(ns)  Generation(ns)  Ollama-total(ns)  E2E(s)"]
-    lines.append("-" * 86)
-    for condition in sorted(summary):
-        item = summary[condition]
-        fmt = lambda value: "n/a" if value is None else f"{value:.1f}"
-        lines.append(
-            f"{condition:<10} {item['n']:<2} {item['success_rate'] * 100:>6.0f}%"
-            f" {item['retry_rate'] * 100:>5.0f}% {fmt(item['prompt_eval_duration']):>16}"
-            f" {fmt(item['eval_duration']):>16} {fmt(item['total_duration']):>17}"
-            f" {fmt(item['wall_seconds']):>7}"
-        )
-    return "\n".join(lines)
+    output_lines = []
+
+    for label in sorted(summary):
+        output_lines.append(f"Label: {label}")
+        output_lines.append("Condition  n  Success  Retry  Prompt-eval(ns)  Generation(ns)  Ollama-total(ns)  E2E(s)  Status Breakdown")
+        output_lines.append("-" * 115)
+
+        conditions = summary[label]
+        for condition in sorted(conditions):
+            item = conditions[condition]
+            fmt = lambda value: "n/a" if value is None else f"{value:.1f}"
+
+            sc_str = ", ".join(f"{st}: {count}" for st, count in sorted(item["status_counts"].items()))
+
+            output_lines.append(
+                f"{condition:<10} {item['n']:<2} {item['success_rate'] * 100:>6.0f}%"
+                f" {item['retry_rate'] * 100:>5.0f}% {fmt(item['prompt_eval_duration']):>16}"
+                f" {fmt(item['eval_duration']):>16} {fmt(item['total_duration']):>17}"
+                f" {fmt(item['wall_seconds']):>7}  {sc_str}"
+            )
+        output_lines.append("")
+
+    return "\n".join(output_lines).rstrip()
 
 
 def main(argv=None):

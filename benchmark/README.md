@@ -64,15 +64,35 @@ The repo is hard-reset (`git reset --hard && git clean -fd`) before every run, s
 
 ### Local contract benchmark (additive, never v1)
 
-Contract mode is a separate local-Ollama execution path. The historical Claude+MiMo v1 `RESULTS.md` and `raw_data.jsonl` are frozen, unrelated to local-Qwen performance, and must not be overwritten. The additive path uses five warm repetitions per condition and records direct Ollama and contract-router conditions (plus an optional wrapper) with the same model, prompt, target, context, and output limits. It records prompt-evaluation time, generation time, total Ollama time, end-to-end time, success rate, and retry rate.
+Contract mode is a separate local-Ollama execution path. The historical Claude+MiMo v1 `RESULTS.md` and `raw_data.jsonl` are frozen, unrelated to local-Qwen performance, and must never be overwritten. Results are published as NEW columns and sections beside the frozen v1 baseline. The additive path uses five warm repetitions per condition and records direct Ollama and contract-router conditions (plus an optional wrapper) with the same model, prompt, target, context, and output limits. It records prompt-evaluation time, generation time, total Ollama time, end-to-end time, success rate, retry rate, task shape label (`LABEL`), and verbatim failure class status (`PASS`, `NOOP`, `TEST_FAIL`, `PREFLIGHT_FAIL`, `FAIL`).
+
+#### Required & Optional Environment Variables
+
+- `LABEL` (required): Task shape label identifier (e.g. `mirror-with-template`, `plain-bounded-impl`, `regex-escaping-heavy`).
+- `TARGET_FILE` (required): Target file path within repository.
+- `INSTRUCTIONS` (required): Full task spec string.
+- `TEST_COMMAND` (required): Verification test command.
+- `CONTEXT_FILES` (optional): Comma-separated repo-relative paths (e.g. `test/template_test.dart`) included as read-only context in `direct` prompts and `"context_files": [...]` in contract JSON payloads.
+- `MODEL` (default: `qwen3-coder:30b`), `NUM_CTX` (default: `32768`), `REPS` (default: `5`), `OUT_DIR`.
+
+#### Recommended Task Shapes
+
+To obtain a credible, non-misleading evaluation of local contract execution, run all three representative task shapes:
+
+1. **(a) Mirror-an-existing-file WITH a template in `CONTEXT_FILES`**: e.g., delegating a unit test while supplying a working `*_test.dart` in `CONTEXT_FILES` as a structural skeleton template (the skill's primary success mode).
+2. **(b) Plain bounded implementation**: Standard single-file edits with complete interfaces, invariants, and objective tests.
+3. **(c) Regex / quote-escaping-heavy**: Tasks involving regex pattern creation or heavy string escaping (which local models reliably corrupt and fail as `PREFLIGHT_FAIL`).
 
 Run it against a clean committed target without writing into the frozen dataset:
 
 ```bash
-TARGET_FILE=src/file.ts \
-INSTRUCTIONS='precise bounded change with interfaces, invariants, forbidden changes, and test' \
-TEST_COMMAND='npm test -- src/file.spec.ts' \
+LABEL='mirror-with-template' \
+TARGET_FILE='test/feature_test.dart' \
+CONTEXT_FILES='test/template_test.dart' \
+INSTRUCTIONS='implement unit tests for feature matching the structural template' \
+TEST_COMMAND='dart test test/feature_test.dart' \
 bash benchmark/run_local_contract.sh
+
 python3 benchmark/local_contract_report.py benchmark/local-results-YYYYMMDD-HHMMSS/<run>.jsonl
 python3 benchmark/test_local_contract_report.py
 ```
