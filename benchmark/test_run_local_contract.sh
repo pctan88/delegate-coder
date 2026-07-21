@@ -13,7 +13,8 @@ git -C "$REPO" init -q
 git -C "$REPO" config user.email test@example.invalid
 git -C "$REPO" config user.name test
 printf 'original\n' > "$REPO/target.txt"
-git -C "$REPO" add target.txt
+printf 'template code content\n' > "$REPO/template.txt"
+git -C "$REPO" add target.txt template.txt
 git -C "$REPO" commit -qm initial
 
 cat > "$BIN/ollama" <<'SH'
@@ -54,14 +55,16 @@ SH
 chmod +x "$BIN/ollama" "$BIN/curl"
 
 run_benchmark() {
-  local out_dir="$1" test_command="$2" wrapper_command="$3"
+  local out_dir="$1" test_command="$2" wrapper_command="$3" label="${4:-test-label}" context_files="${5:-}"
   mkdir -p "$out_dir"
   (
     cd "$REPO"
     PATH="$BIN:$PATH" \
       CURL_RECORD="$TEST_ROOT/requests.jsonl" \
       REPO_DIR="$REPO" BASE_REF=HEAD \
+      LABEL="$label" \
       TARGET_FILE=target.txt \
+      CONTEXT_FILES="$context_files" \
       INSTRUCTIONS='replace the complete file with the requested fixture' \
       TEST_COMMAND="$test_command" \
       MODEL=test-qwen NUM_CTX=32768 KEEP_ALIVE=30m \
@@ -78,6 +81,7 @@ if (
   PATH="$BIN:$PATH" \
     CURL_RECORD="$TEST_ROOT/invalid-requests.jsonl" \
     REPO_DIR="$REPO" BASE_REF=does-not-resolve \
+    LABEL=test-label \
     TARGET_FILE=target.txt INSTRUCTIONS=invalid TEST_COMMAND=true \
     OUT_DIR="$INVALID_OUT" REPS=5 \
     bash "$ROOT/benchmark/run_local_contract.sh" >/dev/null 2>&1
@@ -87,8 +91,37 @@ if (
 fi
 [[ ! -e "$TEST_ROOT/invalid-requests.jsonl" ]]
 
+# Test missing LABEL validation
+if (
+  cd "$REPO"
+  PATH="$BIN:$PATH" \
+    REPO_DIR="$REPO" BASE_REF=HEAD \
+    LABEL="" \
+    TARGET_FILE=target.txt INSTRUCTIONS=invalid TEST_COMMAND=true \
+    OUT_DIR="$INVALID_OUT" REPS=5 \
+    bash "$ROOT/benchmark/run_local_contract.sh" >/dev/null 2>&1
+); then
+  echo "missing LABEL should exit with error" >&2
+  exit 1
+fi
+
+# Test missing CONTEXT_FILES validation
+if (
+  cd "$REPO"
+  PATH="$BIN:$PATH" \
+    REPO_DIR="$REPO" BASE_REF=HEAD \
+    LABEL=test-label \
+    CONTEXT_FILES=nonexistent_file.txt \
+    TARGET_FILE=target.txt INSTRUCTIONS=invalid TEST_COMMAND=true \
+    OUT_DIR="$INVALID_OUT" REPS=5 \
+    bash "$ROOT/benchmark/run_local_contract.sh" >/dev/null 2>&1
+); then
+  echo "missing context file in CONTEXT_FILES should exit with error" >&2
+  exit 1
+fi
+
 WRAPPER_COMMAND="bash \"$ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/delegate.sh\" contract \"\$CONTRACT_JSON\""
-run_benchmark "$OUT" "grep -q '^good$' target.txt" "$WRAPPER_COMMAND"
+run_benchmark "$OUT" "grep -q '^good$' target.txt" "$WRAPPER_COMMAND" "shape-mirror" "template.txt"
 RESULT="$(find "$OUT" -type f -name '*.jsonl' -print -quit)"
 [[ -n "$RESULT" ]]
 
@@ -103,6 +136,9 @@ records = [json.loads(line) for line in result_lines]
 assert len(records) == 15, len(records)
 assert Counter(record["condition"] for record in records) == Counter(direct=5, contract=5, wrapper=5), Counter(record["condition"] for record in records)
 for record in records:
+    assert record["label"] == "shape-mirror", record
+    assert "status" in record, record
+    assert record["status"] == "PASS", record
     assert isinstance(record["total_duration"], int), record
     assert isinstance(record["wall_seconds"], float)
 
@@ -112,6 +148,9 @@ measured = [request for request in requests if request.get("prompt", "").startsw
 assert len(measured) == 15, [(r.get("model"), r.get("prompt", "")[:30]) for r in requests]
 first_direct = measured[0]
 first_contract = measured[5]
+
+assert "File: template.txt\n```\ntemplate code content" in first_direct["prompt"], first_direct["prompt"]
+
 for idx, request in enumerate(measured):
     assert request["model"] == "test-qwen"
     assert request["system"] == first_direct["system"]
@@ -125,7 +164,7 @@ for idx, request in enumerate(measured):
 PY
 
 FAIL_OUT="$TEST_ROOT/fail-out"
-run_benchmark "$FAIL_OUT" false true
+run_benchmark "$FAIL_OUT" false true "shape-fail"
 FAIL_RESULT="$(find "$FAIL_OUT" -type f -name '*.jsonl' -print -quit)"
 python3 - "$FAIL_RESULT" <<'PY'
 import json
@@ -135,6 +174,7 @@ records = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().sp
 wrappers = [record for record in records if record["condition"] == "wrapper"]
 assert len(wrappers) == 5
 assert all(record["success"] is False for record in wrappers)
+assert all(record["status"] in ("TEST_FAIL", "FAIL") for record in wrappers)
 PY
 
 echo "local benchmark runner tests passed"
