@@ -41,7 +41,7 @@ RESTORED=0
 REPORT_EMITTED=0
 FINAL_STATUS="FAIL"
 RETRY_COUNT=0
-NOOP_CANDIDATE_PATH=""
+SAVED_CANDIDATE_PATH=""
 PREFLIGHT_FAIL_COUNT=0
 LAST_FAILURE_TYPE=""
 HINT_MESSAGE=""
@@ -893,9 +893,10 @@ emit_report() {
   if [[ "$FINAL_STATUS" == PASS ]]; then
     if cmp -s "$ORIGINAL_FILE" "$CANDIDATE_FILE"; then
       FINAL_STATUS=NOOP
-      if [[ -s "$CANDIDATE_FILE" && -z "$NOOP_CANDIDATE_PATH" ]]; then
-        NOOP_CANDIDATE_PATH="$(mktemp "${TMPDIR:-/tmp}/delegate-coder-candidate.XXXXXX")"
-        cp "$CANDIDATE_FILE" "$NOOP_CANDIDATE_PATH"
+      if [[ -s "$CANDIDATE_FILE" && -z "$SAVED_CANDIDATE_PATH" ]]; then
+        # Preserve candidate output in /tmp for operator inspection before rollback.
+        SAVED_CANDIDATE_PATH="$(mktemp "${TMPDIR:-/tmp}/delegate-coder-candidate.XXXXXX")"
+        cp "$CANDIDATE_FILE" "$SAVED_CANDIDATE_PATH"
       fi
       if ! restore_worktree; then
         FINAL_STATUS=FAIL
@@ -912,9 +913,10 @@ emit_report() {
       fi
     fi
   else
-    if [[ -s "$CANDIDATE_FILE" && -z "$NOOP_CANDIDATE_PATH" ]]; then
-      NOOP_CANDIDATE_PATH="$(mktemp "${TMPDIR:-/tmp}/delegate-coder-candidate.XXXXXX")"
-      cp "$CANDIDATE_FILE" "$NOOP_CANDIDATE_PATH"
+    if [[ -s "$CANDIDATE_FILE" && -z "$SAVED_CANDIDATE_PATH" ]]; then
+      # Preserve candidate output in /tmp for operator inspection before rollback.
+      SAVED_CANDIDATE_PATH="$(mktemp "${TMPDIR:-/tmp}/delegate-coder-candidate.XXXXXX")"
+      cp "$CANDIDATE_FILE" "$SAVED_CANDIDATE_PATH"
     fi
     if [[ "$SNAPSHOT_READY" -eq 1 ]] && worktree_needs_restore; then
       restore_worktree || ERROR_MESSAGE="could not restore worktree after failure"
@@ -928,7 +930,7 @@ emit_report() {
   printf -- '- Branch: %s\n' "$BRANCH_NAME"
   printf -- '- Restored: %s\n' "$([[ "$RESTORED" -eq 1 ]] && echo true || echo false)"
   printf -- '- Candidate accepted: %s\n' "$([[ "$ACCEPTED" -eq 1 ]] && echo true || echo false)"
-  [[ -n "$NOOP_CANDIDATE_PATH" ]] && printf -- '- Worker candidate saved to: %s\n' "$NOOP_CANDIDATE_PATH"
+  [[ -n "$SAVED_CANDIDATE_PATH" ]] && printf -- '- Worker candidate saved to: %s\n' "$SAVED_CANDIDATE_PATH"
   [[ -n "$ERROR_MESSAGE" ]] && printf -- '- Error: %s\n' "${ERROR_MESSAGE//$'\n'/ }"
   [[ -n "${HINT_MESSAGE:-}" ]] && printf -- '- Hint: %s\n' "${HINT_MESSAGE//$'\n'/ }"
   [[ -n "$OUTSIDE_CHANGES" ]] && printf -- '- Outside changes: %s\n' "${OUTSIDE_CHANGES//$'\n'/, }"

@@ -170,8 +170,6 @@ for index, item in enumerate(items, 1):
         raise SystemExit(f"delegate: target_file resolves outside the repository: {target}")
     if parent_real != root and root not in parent_real.parents:
         raise SystemExit(f"delegate: target_file resolves outside the repository: {target}")
-    if not parent.exists():
-        parent.mkdir(parents=True, exist_ok=True)
     if target_path.is_symlink():
         raise SystemExit(f"delegate: target_file must not be a symlink: {target}")
     if target_path.exists() and not target_path.is_file():
