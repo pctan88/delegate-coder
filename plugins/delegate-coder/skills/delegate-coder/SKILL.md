@@ -37,6 +37,10 @@ Before delegating, check the selected config for `enabled` and `scope`:
 
 Anything ambiguous, architecture-defining, or security-sensitive: do it yourself instead of delegating.
 
+Routing heuristics for contract mode:
+- If the task is "mirror/adapt an existing file," ALWAYS pass the reference via `context_files` — this is the strongest predictor of success.
+- Do NOT route files whose core work is regex construction or string/quote-escaping to contract mode — implement those yourself; the local model reliably corrupts them.
+
 ## Step 3: Write the spec and delegate
 
 Worker agents execute well but interpret poorly. Your spec must include: exact scope (file paths), expected behavior, constraints (style, libraries, what NOT to touch), and how to verify (test command). Vague handoffs waste both your tokens and the worker's cycles. In your prompt/spec to the worker, explicitly instruct the worker to run the provided verify command and include its raw output; forbid claiming untested success. Also instruct the worker that if the spec conflicts with the existing codebase or itself, they must flag the conflict instead of silently complying.
