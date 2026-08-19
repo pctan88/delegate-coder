@@ -1,0 +1,5 @@
+Label: plain-bounded-impl
+Condition  n  Success  Retry  Prompt-eval(ns)  Generation(ns)  Ollama-total(ns)  E2E(s)  Status Breakdown
+-------------------------------------------------------------------------------------------------------------------
+contract   5     100%     0%       60299400.0     6278938400.0      6461727600.0     7.7  PASS: 5
+direct     5     100%     0%       95782200.0     6374109600.0      6597257366.8     6.8  PASS: 5

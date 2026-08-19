@@ -12,6 +12,10 @@ CURL_TIMEOUT="${CURL_TIMEOUT:-600}"; TEST_TIMEOUT="${TEST_TIMEOUT:-300}"; REPS="
 # THINK: reasoning-mode control for thinking-capable models (e.g. qwen3.8:27b).
 # Unset (default) sends no "think" field, so previously recorded numbers stand.
 THINK="${THINK:-}"
+# OUTPUT_HEADROOM: extra output tokens on top of the file_size/3+256 estimate.
+# Verbose models (qwen3.8 adds docstrings) overflow the default on small files.
+OUTPUT_HEADROOM="${OUTPUT_HEADROOM:-0}"
+[[ "$OUTPUT_HEADROOM" =~ ^[0-9]+$ ]] || { echo "OUTPUT_HEADROOM must be a non-negative integer" >&2; exit 2; }
 case "$THINK" in
   ''|true|false) ;;
   *) echo "THINK must be unset, true, or false (got: $THINK)" >&2; exit 2 ;;
@@ -56,7 +60,7 @@ prepare_gpu() { local lines model; lines="$(ollama ps 2>/dev/null)" || return 1;
 sandbox() { local dir="$1"; mkdir -p "$dir"; git -C "$REPO_DIR" archive "$BASE_COMMIT" | tar -x -C "$dir"; git -C "$dir" init -q; git -C "$dir" config user.email benchmark@example.invalid; git -C "$dir" config user.name benchmark; git -C "$dir" add .; git -C "$dir" commit -qm base; }
 
 build_request() {
-  local dir="$1" out="$2"; INSTRUCTIONS="$INSTRUCTIONS" SYSTEM_PROMPT="$SYSTEM_PROMPT" CONTEXT_FILES="$CONTEXT_FILES" THINK="$THINK" python3 - "$out" "$dir/$TARGET_FILE" "$TARGET_FILE" "$MODEL" "$NUM_CTX" "$KEEP_ALIVE" "$dir" <<'PY'
+  local dir="$1" out="$2"; INSTRUCTIONS="$INSTRUCTIONS" SYSTEM_PROMPT="$SYSTEM_PROMPT" CONTEXT_FILES="$CONTEXT_FILES" THINK="$THINK" OUTPUT_HEADROOM="$OUTPUT_HEADROOM" python3 - "$out" "$dir/$TARGET_FILE" "$TARGET_FILE" "$MODEL" "$NUM_CTX" "$KEEP_ALIVE" "$dir" <<'PY'
 import json, os, pathlib, re, sys
 out, target, target_label, model, limit, keep_alive, dir_path = sys.argv[1:]
 source = pathlib.Path(target).read_bytes()
@@ -77,7 +81,7 @@ if os.environ.get("CONTEXT_FILES"):
             fence = "`" * max(3, (max(runs) + 1) if runs else 3)
             user += f"\nFile: {cf}\n{fence}\n{cf_content}\n{fence}\n"
 
-expected = max(256, (len(source)+2)//3)
+expected = max(256, (len(source)+2)//3) + int(os.environ.get("OUTPUT_HEADROOM", "0"))
 if (len((os.environ['SYSTEM_PROMPT']+user).encode())+2)//3 + expected + 256 > int(limit): raise SystemExit("prompt plus expected output exceeds context")
 payload = {"model":model,"system":os.environ["SYSTEM_PROMPT"],"prompt":user,"stream":False,"format":{"type":"object","properties":{"updated_file":{"type":"string"}},"required":["updated_file"],"additionalProperties":False},"options":{"num_ctx":int(limit),"temperature":0,"num_predict":expected+256},"keep_alive":keep_alive}
 if os.environ.get("THINK") in ("true","false"): payload["think"] = os.environ["THINK"] == "true"
@@ -158,7 +162,7 @@ PY
 contract() {
   local rep="$1" dir="$WORK_DIR/contract-$rep" report="$WORK_DIR/contract-$rep-report" metrics="$WORK_DIR/contract-$rep-metrics" start end success=0 retries=0 status="FAIL"
   sandbox "$dir"; local json_contract="$(make_contract_json)"; start="$(now_ns)"
-  (cd "$dir" && DELEGATE_MODEL="$MODEL" DELEGATE_NUM_CTX="$NUM_CTX" DELEGATE_KEEP_ALIVE="$KEEP_ALIVE" DELEGATE_CURL_TIMEOUT="$CURL_TIMEOUT" DELEGATE_TEST_TIMEOUT="$TEST_TIMEOUT" DELEGATE_THINK="$THINK" bash "$HERE/../plugins/delegate-coder/skills/delegate-coder/scripts/delegate.sh" contract "$json_contract") > "$report" 2>&1
+  (cd "$dir" && DELEGATE_MODEL="$MODEL" DELEGATE_NUM_CTX="$NUM_CTX" DELEGATE_KEEP_ALIVE="$KEEP_ALIVE" DELEGATE_CURL_TIMEOUT="$CURL_TIMEOUT" DELEGATE_TEST_TIMEOUT="$TEST_TIMEOUT" DELEGATE_THINK="$THINK" DELEGATE_OUTPUT_HEADROOM="$OUTPUT_HEADROOM" bash "$HERE/../plugins/delegate-coder/skills/delegate-coder/scripts/delegate.sh" contract "$json_contract") > "$report" 2>&1
   status="$(sed -n 's/^- Status: //p' "$report" | head -n1)"
   [[ -n "$status" ]] || status="FAIL"
   [[ "$status" =~ ^(PASS|NOOP)$ ]] && success=1; retries="$(sed -n 's/^- Retries: //p' "$report" | head -n1)"; [[ "$retries" =~ ^[0-9]+$ ]] || retries=0
