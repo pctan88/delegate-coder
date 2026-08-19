@@ -12,6 +12,13 @@ KEEP_ALIVE="${DELEGATE_KEEP_ALIVE:-30m}"
 CURL_TIMEOUT="${DELEGATE_CURL_TIMEOUT:-600}"
 TEST_TIMEOUT="${DELEGATE_TEST_TIMEOUT:-300}"
 MIN_OUTPUT_BUDGET="${DELEGATE_MIN_OUTPUT_BUDGET:-4096}"
+# Reasoning-mode control for thinking-capable models (e.g. qwen3.8:27b).
+# Unset (default) sends no "think" field, preserving legacy behaviour exactly.
+THINK="${DELEGATE_THINK:-}"
+case "$THINK" in
+  ''|true|false) ;;
+  *) echo "contract-router: DELEGATE_THINK must be unset, true, or false (got: $THINK)" >&2; exit 1 ;;
+esac
 
 for setting_name in NUM_CTX CURL_TIMEOUT TEST_TIMEOUT MIN_OUTPUT_BUDGET; do
   setting_value="${!setting_name}"
@@ -592,7 +599,7 @@ build_request() {
   local failure_file="${1:-}"
   local source_file="$ORIGINAL_FILE"
   [[ -z "$failure_file" ]] || source_file="$TARGET_PATH"
-  SCRIPT_LIB="$ROUTER_DIR/lib" python3 - "$REQUEST_FILE" "$TARGET_FILE" "$INSTRUCTIONS_FILE" "$source_file" "$failure_file" "$MODEL" "$SYSTEM_PROMPT" "$NUM_CTX" "$KEEP_ALIVE" "$ROOT_DIR" "$WORK_DIR/parsed/context_files.json" "$MIN_OUTPUT_BUDGET" <<'PY'
+  SCRIPT_LIB="$ROUTER_DIR/lib" DELEGATE_THINK="$THINK" python3 - "$REQUEST_FILE" "$TARGET_FILE" "$INSTRUCTIONS_FILE" "$source_file" "$failure_file" "$MODEL" "$SYSTEM_PROMPT" "$NUM_CTX" "$KEEP_ALIVE" "$ROOT_DIR" "$WORK_DIR/parsed/context_files.json" "$MIN_OUTPUT_BUDGET" <<'PY'
 import json
 import os
 import pathlib
@@ -671,6 +678,11 @@ payload = {
     "options": {"num_ctx": limit, "temperature": 0, "num_predict": output_budget},
     "keep_alive": keep_alive,
 }
+# Thinking-capable models route their answer into the separate "thinking" field
+# and leave "response" empty, which fails the structured-output contract.
+think = os.environ.get("DELEGATE_THINK", "")
+if think in ("true", "false"):
+    payload["think"] = think == "true"
 pathlib.Path(request_path).write_text(json.dumps(payload, ensure_ascii=False))
 PY
 }
@@ -760,16 +772,21 @@ restore_target() {
   RESTORED=1
 }
 
+# Probe an interpreter for real usability. command -v is not enough: a version
+# manager shim (pyenv with no version selected) resolves fine but exits 127,
+# which run_preflight would otherwise misreport as a syntax error.
+interpreter_works() { "$1" -c 'pass' >/dev/null 2>&1; }
+
 find_project_interpreter() {
-  if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
-    echo "$ROOT_DIR/.venv/bin/python"
-  elif [[ -x "$ROOT_DIR/venv/bin/python" ]]; then
-    echo "$ROOT_DIR/venv/bin/python"
-  elif command -v python >/dev/null 2>&1; then
-    echo "python"
-  elif command -v python3 >/dev/null 2>&1; then
-    echo "python3"
-  fi
+  local candidate
+  for candidate in "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/venv/bin/python"; do
+    [[ -x "$candidate" ]] && interpreter_works "$candidate" && { echo "$candidate"; return 0; }
+  done
+  # python3 before bare python: python3 is the portable modern name, and bare
+  # python is the one most often shadowed by a broken shim.
+  for candidate in python3 python; do
+    command -v "$candidate" >/dev/null 2>&1 && interpreter_works "$candidate" && { echo "$candidate"; return 0; }
+  done
 }
 
 run_preflight() {
