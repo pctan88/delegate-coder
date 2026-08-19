@@ -5,6 +5,14 @@ Additive to `RESULTS.md` (frozen v1 Claude+MiMo data) — nothing here modifies 
 Date 2026-08-19 · Ollama 0.32.14 · Apple silicon, 36 GB · `num_ctx` 32768 · `temperature` 0
 Raw data: `matrix-results/` (contract/, freeform-v2.jsonl, scaling.jsonl)
 
+`matrix-results/freeform-v1-DISCARDED-harness-bug.jsonl` is retained for
+provenance only — **do not read its numbers.** That run scored
+`qwen3-coder:30b` as SYNTAX_FAIL 3/3 on two tasks because the probe's
+code-fence extractor could not parse a fence whose info line carried echoed
+prompt text (```` ```python code fence. ````), so it syntax-checked the fence
+itself. The model's output was correct. `freeform-v2.jsonl` is the valid run,
+after the extractor was fixed and unit-tested against six fence shapes.
+
 ## Verdict
 
 **Keep `qwen3-coder:30b` as the delegate worker.** 44/44 measured runs passed for
