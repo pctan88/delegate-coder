@@ -46,33 +46,49 @@ else
   check_var OLLAMA_KEEP_ALIVE "$KEEPALIVE_EXPECTED"
 fi
 
-# 2. The Cellar template decides what survives the next `brew services restart`.
-echo "cellar template (survives brew services restart):"
-template="$(ls -t /opt/homebrew/Cellar/ollama/*/homebrew.mxcl.ollama.plist 2>/dev/null | head -n1)"
-if [[ -z "$template" ]]; then
-  note "- no template found; skipping (non-Homebrew install?)"
+# 2. Who actually owns the port? A second Ollama (the desktop app) silently
+#    shadows the brew service and serves from ITS own env, which is the failure
+#    seen on 2026-08-22: 6 models on disk, 0 models served.
+echo "port 11434 owner:"
+owner="$(lsof -nP -iTCP:11434 -sTCP:LISTEN 2>/dev/null | awk 'NR==2 {print $2}')"
+if [[ -z "$owner" ]]; then
+  bad "nothing is listening on 11434"
 else
-  note "- $template"
-  missing=()
-  for key in OLLAMA_MODELS OLLAMA_CONTEXT_LENGTH OLLAMA_KEEP_ALIVE; do
-    grep -q "$key" "$template" || missing+=("$key")
-  done
-  if ((${#missing[@]})); then
-    bad "template is missing: ${missing[*]}"
-    note "  -> the running service may be fine now, but the next"
-    note "     'brew services restart ollama' will silently drop these."
-    note "  Fix (per AI/SETUP.md, edit the TEMPLATE not the LaunchAgent):"
-    note "     /usr/libexec/PlistBuddy \\"
-    note "       -c \"Add :EnvironmentVariables:OLLAMA_MODELS string $MODELS_EXPECTED\" \\"
-    note "       -c \"Add :EnvironmentVariables:OLLAMA_CONTEXT_LENGTH string $CTX_EXPECTED\" \\"
-    note "       -c \"Add :EnvironmentVariables:OLLAMA_KEEP_ALIVE string $KEEPALIVE_EXPECTED\" \\"
-    note "       -c Save '$template'"
+  cmd="$(ps -o command= -p "$owner" 2>/dev/null)"
+  case "$cmd" in
+    *Ollama.app*)
+      bad "served by the DESKTOP APP ($cmd)"
+      note "  It ignores the Homebrew LaunchAgent and uses the GUI session env."
+      note "  Either quit Ollama.app so the brew service can bind, or run:"
+      note "     launchctl setenv OLLAMA_MODELS $MODELS_EXPECTED"
+      note "  and restart the app so it inherits the right model directory."
+      ;;
+    *homebrew*|*/opt/homebrew/*) good "served by the Homebrew service" ;;
+    *) note "- served by: $cmd" ;;
+  esac
+fi
+
+# 3. Homebrew builds the LaunchAgent from the FORMULA's `service do` block, not
+#    from the legacy Cellar .plist template. Editing that template has no effect;
+#    every `brew services restart` regenerates and drops custom env vars.
+echo "brew service definition:"
+formula=/opt/homebrew/opt/ollama/.brew/ollama.rb
+if [[ -r "$formula" ]]; then
+  if sed -n '/service do/,/end/p' "$formula" | grep -q OLLAMA_MODELS; then
+    good "formula's service block sets OLLAMA_MODELS"
   else
-    good "all three custom keys present"
+    bad "formula's service block does NOT set OLLAMA_MODELS"
+    note "  -> any 'brew services restart ollama' will drop it."
+    note "  Durable options:"
+    note "   a) edit ~/Library/LaunchAgents/homebrew.mxcl.ollama.plist and reload with"
+    note "      launchctl bootout/bootstrap -- but never run 'brew services' after."
+    note "   b) launchctl setenv OLLAMA_MODELS $MODELS_EXPECTED   (lost on reboot)"
+    note "  NOTE: editing the Cellar .plist template does NOT work on this Homebrew;"
+    note "        the template is legacy and unused."
   fi
 fi
 
-# 3. Does the server actually serve the models we expect?
+# 4. Does the server actually serve the models we expect?
 echo "server:"
 if ! tags="$(curl -fsS --noproxy '*' --max-time 10 "$HOST/api/tags" 2>/dev/null)"; then
   bad "no response from $HOST"
