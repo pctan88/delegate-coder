@@ -183,3 +183,60 @@ Not yet integrated into `contract-router.sh`; `patch_probe.py` is a probe only.
 - Matching is plain substring with a uniqueness requirement — the generous
   reading, chosen to measure the model's ceiling rather than penalise valid
   mid-line anchors.
+
+---
+
+# Validation at 16.4 KB, and a real bug the measurements exposed
+
+Date 2026-08-22 · `qwen3-coder:30b`
+
+## The output-budget estimator was wrong, and it broke contract mode above ~11 KB
+
+The router estimated whole-file output at `bytes/3`. Measured output is
+consistently **~2.58 bytes per token** (1.4 KB, 3.9 KB, 10.3 KB, 16.4 KB targets)
+because JSON string escaping inflates it. That under-budgeted by ~14%, so any
+target above ~11 KB hit `done_reason=length` and failed. The 4096 minimum-budget
+floor hid it below ~10 KB — which is why every existing fixture passed and the
+bug went unnoticed.
+
+Proved empirically on a 16.4 KB / 150-function target:
+
+| | value |
+|---|---|
+| old budget (`bytes/3`) | 5850 |
+| **actual output** | **6546 tokens** |
+| new budget (`bytes/2.4`) | 7248 |
+| result | PASS, 0 retries, 150/150 helpers intact |
+
+The old budget would have cut the file off mid-stream. Predicted need (6505) came
+within 0.6% of actual, confirming the ratio.
+
+Both the router and the benchmark harness now estimate at `bytes/2.4`. Raising a
+`num_predict` cap cannot change a run that already fit under it — at
+`temperature` 0 the same prompt yields the same tokens — so previously passing
+measurements are unaffected; only truncating ones change.
+
+Side effect: this fixes root cause 3 **by default**. `qwen3.8:27b` on T2 direct
+went 0/5 → **5/5** with no `OUTPUT_HEADROOM` set, because the corrected estimate
+alone is now large enough.
+
+## Patch mode at 16.4 KB
+
+Same file, same change, same model:
+
+| Mode | Wall | Output tokens |
+|---|---|---|
+| whole-file (production router) | **111s** | 6546 |
+| patch, fenced blocks | **2.0s** | 124 |
+
+**55x faster, 53x fewer output tokens**, 3/3 PASS.
+
+Output stayed at exactly 124 tokens — the same as the 3.9 KB and 10.3 KB targets.
+Constant output now confirmed across four file sizes, while whole-file grows
+linearly:
+
+| Source | whole-file tokens | patch tokens |
+|---|---|---|
+| 3.9 KB | 1528 | 124 |
+| 10.3 KB | 3954 | 124 |
+| 16.4 KB | 6546 | 124 |
