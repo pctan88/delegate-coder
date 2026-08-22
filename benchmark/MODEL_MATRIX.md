@@ -111,3 +111,75 @@ Sequential is required: two 17 GB models will not co-reside in 36 GB.
 Task tiers live in `benchmark/model_matrix_tasks.sh`; fixtures and checkers in
 `benchmark/fixtures/`. Each checker is validated in both directions — it fails
 on the unmodified fixture and passes against a reference implementation.
+
+---
+
+# Follow-up: edit format (whole-file vs targeted patches)
+
+Date 2026-08-22 · `qwen3-coder:30b` · 3 reps · raw data `matrix-results/patch.jsonl`
+
+Whole-file contract mode pays a ~99% re-transcription tax (bigmod_large emitted
+3954 tokens to express ~23 tokens of change). This tests whether the worker can
+instead emit exact-match edits — the open question being whether a local model
+can reproduce anchor text byte-for-byte.
+
+**It can, in the right format.**
+
+| Format | Result |
+|---|---|
+| Aider-style `<<<<<<< SEARCH` fences | **15/15 PASS** |
+| Schema-constrained JSON `{"edits":[…]}` | 10/15 PASS |
+
+The JSON variant loses because the anchor must survive JSON escaping. Its two
+failure modes were an anchor that never matched (T3: 5 of 7 edits applied, so
+`mark_done` was never added) and, on bigmod-med, a *wrong implementation* —
+`compute_summary` returned 4 instead of the median 3.5, the classic
+`sorted(v)[len(v)//2]` bug on an even-length list. The fenced format got both right.
+
+## The win scales with file size
+
+| Task | Source | Whole-file | Patch (blocks) | Speedup | Tokens cut |
+|---|---|---|---|---|---|
+| T1 simple edit | 1413 B | 8.3s / 570 tok | 5.8s / 505 tok | 1.4x | 1.1x |
+| T2 algorithmic | 732 B | 6.6s / 439 tok | 3.9s / 321 tok | 1.7x | 1.4x |
+| T3 refactor | 1413 B | 10.8s / 570 tok | 11.3s / 863 tok | **1.0x** | **0.7x** |
+| bigmod-med | 3928 B | 20.2s / 1528 tok | 2.4s / 124 tok | 8.4x | 12.3x |
+| bigmod-large | 10257 B | 68.0s / 3954 tok | **1.8s / 124 tok** | **37.6x** | 31.9x |
+
+**Patch output is roughly constant** — 124 tokens for both a 3.9 KB and a 10.3 KB
+file — while whole-file output grows linearly with the file. So the crossover sits
+around 2 KB, and beyond it the advantage compounds.
+
+**T3 is the honest exception:** a diffuse multi-part refactor touches so many
+places that the edits approach the size of the file, and patch mode is *slower*
+(11.3s vs 10.8s) and more verbose. Patch mode wins for localised change, not for
+rewrites.
+
+## It also raises the size ceiling
+
+Because the output no longer scales with the file, the binding constraint becomes
+the prompt:
+
+| | whole-file | patch |
+|---|---|---|
+| `num_ctx` 32768 | ~23 KB | ~95 KB |
+| `num_ctx` 65536 | ~46 KB | ~191 KB |
+
+## Recommendation
+
+Adopt the fenced SEARCH/REPLACE format for targets above ~2 KB; keep whole-file
+for small files and for diffuse rewrites. Contract mode's existing test gate and
+single retry are what make this safe — a bad anchor fails the test and reverts,
+rather than silently corrupting the file.
+
+Not yet integrated into `contract-router.sh`; `patch_probe.py` is a probe only.
+
+## Caveats
+
+- One model, 3 reps, `temperature` 0. Low variance, limited generality.
+- Anchor failures were common even when the task passed: T1's JSON variant lost
+  1 of 3 edits every rep and still passed, because the applied edits sufficed.
+  Partial application is a yellow flag that a pass/fail metric hides.
+- Matching is plain substring with a uniqueness requirement — the generous
+  reading, chosen to measure the model's ceiling rather than penalise valid
+  mid-line anchors.
