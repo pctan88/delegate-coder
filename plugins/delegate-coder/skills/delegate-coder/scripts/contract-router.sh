@@ -653,7 +653,11 @@ if context_files_path.exists():
                 raise SystemExit(f"contract-router: failed to read context file {cf}: {e}")
 
 prompt_tokens = (len((system_prompt + user).encode("utf-8")) + 2) // 3
-expected_output_tokens = max(256, (len(source_bytes) + 2) // 3) + int(os.environ.get("DELEGATE_OUTPUT_HEADROOM", "0"))
+# Measured, not guessed: whole-file JSON-escaped output came in at ~2.58 bytes
+# per token across 1.4 KB / 3.9 KB / 10.3 KB targets, so the old bytes/3 estimate
+# under-budgeted by ~14%. The 4096 floor hid that below ~10 KB; above it, every
+# request truncated. 2.4 leaves ~7% margin over the measured ratio.
+expected_output_tokens = max(256, (len(source_bytes) * 10) // 24) + int(os.environ.get("DELEGATE_OUTPUT_HEADROOM", "0"))
 reserved_tokens = 256
 output_budget = expected_output_tokens + reserved_tokens
 
