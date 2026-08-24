@@ -17,9 +17,11 @@ KEEPALIVE_EXPECTED="${OLLAMA_KEEPALIVE_EXPECTED:-1h}"
 HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
 LABEL=homebrew.mxcl.ollama
 problems=0
+warnings=0
 
 note() { printf '  %s\n' "$1"; }
 bad() { printf '  ✗ %s\n' "$1"; problems=$((problems + 1)); }
+warn() { printf '  ! %s\n' "$1"; warnings=$((warnings + 1)); }
 good() { printf '  ✓ %s\n' "$1"; }
 
 echo "Ollama environment check"
@@ -77,7 +79,7 @@ if [[ -r "$formula" ]]; then
   if sed -n '/service do/,/end/p' "$formula" | grep -q OLLAMA_MODELS; then
     good "formula's service block sets OLLAMA_MODELS"
   else
-    bad "formula's service block does NOT set OLLAMA_MODELS"
+    warn "formula's service block does NOT set OLLAMA_MODELS (latent risk, not a current fault)"
     note "  -> any 'brew services restart ollama' will drop it."
     note "  Durable options:"
     note "   a) edit ~/Library/LaunchAgents/homebrew.mxcl.ollama.plist and reload with"
@@ -108,7 +110,11 @@ fi
 
 echo
 if ((problems)); then
-  echo "FAIL: $problems problem(s). The local worker will not work until fixed."
+  echo "FAIL: $problems problem(s) breaking the stack right now${warnings:+, plus $warnings latent risk(s)}."
   exit 1
+fi
+if ((warnings)); then
+  echo "OK with warnings: the stack works now, but $warnings latent risk(s) will bite later."
+  exit 0
 fi
 echo "OK: local Ollama stack is configured as expected."
