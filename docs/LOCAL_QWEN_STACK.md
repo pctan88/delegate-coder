@@ -3,9 +3,13 @@
 Reference for humans and agents working on this machine. Written 2026-08-22 after
 a full day lost to two of the traps below.
 
-> **Correction to `~/Cowork/AI/SETUP.md`:** that file says to fix env vars by
-> editing the Cellar `.plist` template. **That does not work on this Homebrew
-> version** — see Trap 2. Prefer this document where the two disagree.
+> **Relationship to `~/Cowork/AI/SETUP.md`:** both were reconciled 2026-08-22 and
+> now agree. SETUP.md is the fuller history (incidents, capability tests, project
+> inventory); this is the working summary. One correction was applied to SETUP.md:
+> its instruction to edit the Cellar `.plist` template does not work on this
+> Homebrew version (see Trap 2). Its §8b account of the port race was already
+> correct, including the `launchctl disable` prevention — which had silently been
+> undone by an app update, and is what caused the 2026-08-22 outage.
 
 ---
 
@@ -111,9 +115,23 @@ Diagnose:
 lsof -nP -iTCP:11434 -sTCP:LISTEN
 ```
 
-Fix: pick **one** server and remove the other. If keeping the app, give it the env
-via `launchctl setenv OLLAMA_MODELS /Users/pctan/Cowork/AI/models` and restart it.
-Two servers coexisting means your models' visibility depends on boot order.
+**Durable prevention — disable the app's login agent so it can never win the port
+at boot:**
+
+```bash
+launchctl disable gui/$(id -u)/com.ollama.ollama
+launchctl print-disabled gui/$(id -u) | grep ollama   # com.ollama.ollama => disabled
+```
+
+This persists across reboots but **not across the app re-registering itself**, which
+an app update will do. Re-check it after every Ollama app update — it is the single
+check that prevents this entire failure mode.
+
+The app is still fine to use as a UI: with the agent disabled it attaches to the
+running brew service instead of spawning a rival server. If you would rather keep
+the app as the server, give it the env with
+`launchctl setenv OLLAMA_MODELS /Users/pctan/Cowork/AI/models` and restart it — but
+pick one server; two coexisting means visibility depends on boot order.
 
 ### Trap 2 — `brew services` drops the custom env on every restart
 
