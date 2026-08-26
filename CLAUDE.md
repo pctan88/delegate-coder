@@ -6,8 +6,9 @@ This repo is a Claude Code **plugin marketplace** (`tan-tools`). The plugin `del
 
 Read `docs/LOCAL_QWEN_STACK.md` before touching Ollama, model routing, or
 debugging a local-worker failure. It documents the model inventory, which model to
-route to, and five traps that each look like something other than what they are —
-including two that corrected `~/Cowork/AI/SETUP.md`. Run
+route to, and five traps that each look like something other than what they are.
+Reconciled with `~/Cowork/AI/SETUP.md` on 2026-08-22 (one correction: its
+Cellar-template fix does not work on this Homebrew). Run
 `bash benchmark/check_ollama_env.sh` to diagnose the stack in one shot.
 
 ## Layout
