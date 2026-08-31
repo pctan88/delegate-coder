@@ -201,6 +201,13 @@ for index, item in enumerate(items, 1):
     if "context_files" in item and item["context_files"] is not None:
         if not isinstance(item["context_files"], list) or not all(isinstance(f, str) for f in item["context_files"]):
             raise ValueError(f"contract {index}: context_files must be a JSON array of strings")
+    # Dependency guard: allow_downgrade must be a boolean, or an array of package-name strings.
+    if "allow_downgrade" in item and item["allow_downgrade"] is not None:
+        allow_downgrade = item["allow_downgrade"]
+        valid_bool = isinstance(allow_downgrade, bool)
+        valid_list = isinstance(allow_downgrade, list) and all(isinstance(name, str) for name in allow_downgrade)
+        if not (valid_bool or valid_list):
+            raise ValueError(f"contract {index}: allow_downgrade must be a boolean or a JSON array of strings")
 PY
     then
       return 0
@@ -344,6 +351,18 @@ for f in context_files:
     if not isinstance(f, str):
         raise ValueError("context_files items must be strings")
 (destination / "context_files.json").write_text(json.dumps(context_files, ensure_ascii=False))
+
+# Dependency guard: allow_downgrade is optional; boolean true allows every
+# downgrade in this contract, or pass an array of package names to allow
+# individually. Defaults to no downgrades permitted.
+allow_downgrade = value.get("allow_downgrade")
+if allow_downgrade is None:
+    allow_downgrade = []
+elif not (isinstance(allow_downgrade, bool) or isinstance(allow_downgrade, list)):
+    raise ValueError("allow_downgrade must be a boolean or a JSON array of strings")
+elif isinstance(allow_downgrade, list) and not all(isinstance(item, str) for item in allow_downgrade):
+    raise ValueError("allow_downgrade array items must be strings")
+(destination / "allow_downgrade.json").write_text(json.dumps(allow_downgrade, ensure_ascii=False))
 PY
 }
 
@@ -356,6 +375,8 @@ parse_contract_regex() {
   done
   # Phase 2: ensure context_files.json has an empty array fallback
   echo "[]" > "$WORK_DIR/parsed/context_files.json"
+  # Dependency guard: no downgrades permitted when the regex fallback parser is used.
+  echo "[]" > "$WORK_DIR/parsed/allow_downgrade.json"
 }
 
 snapshot_target() {
@@ -403,7 +424,12 @@ $target_status"
   if [[ -f "$TARGET_PATH" ]]; then
     ORIGINAL_EXISTS=1
     cp "$TARGET_PATH" "$ORIGINAL_FILE" || fail "could not snapshot target file"
-    ORIGINAL_MODE="$(stat -f '%Lp' "$TARGET_PATH" 2>/dev/null || stat -c '%a' "$TARGET_PATH" 2>/dev/null || echo 644)"
+    # GNU stat's "-f" means "filesystem status", not "format" (that's BSD/macOS
+    # stat's meaning of -f); on Linux, "stat -f '%Lp' file" silently succeeds
+    # printing an unrelated filesystem-info dump instead of erroring, so the
+    # BSD form must not be tried first or it wins the `||` chain with garbage.
+    # Try the GNU form first (errors cleanly on macOS/BSD stat), then the BSD form.
+    ORIGINAL_MODE="$(stat -c '%a' "$TARGET_PATH" 2>/dev/null || stat -f '%Lp' "$TARGET_PATH" 2>/dev/null || echo 644)"
   else
     ORIGINAL_EXISTS=0
     : > "$ORIGINAL_FILE"
@@ -842,6 +868,13 @@ run_preflight() {
         echo "contract-router: preflight skipped: tsc not found" >&2
       fi
       ;;
+    json)
+      echo "contract-router: running syntax preflight check: json.load \"$TARGET_PATH\"" >&2
+      python3 -c 'import json,sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    json.load(handle)' "$TARGET_PATH" > "$TEST_LOG" 2>&1
+      preflight_status=$?
+      ;;
   esac
 
   if [[ "$preflight_status" -ne 0 ]]; then
@@ -849,6 +882,41 @@ run_preflight() {
     return "$preflight_status"
   fi
   return 0
+}
+
+# Dependency-manifest guard: catches two failure modes seen from local
+# workers on package.json contracts (2026-08-28 Lead Portal Angular 22
+# migration dogfood) -- a hallucinated/invalid version string, and a silent
+# downgrade of an existing dependency instead of the intended upgrade
+# (observed: keycloak-angular moved backward instead of to the Angular-22
+# compatible major). Runs after syntax preflight (so we know the candidate is
+# valid JSON) and before the project test_command, matching the existing
+# "cheap checks before expensive test command" ordering.
+run_dependency_guard() {
+  local manifest_name="$TARGET_NAME"
+  case "$manifest_name" in
+    package.json) ;;
+    *) return 0 ;;
+  esac
+  echo "contract-router: running dependency manifest guard for $manifest_name" >&2
+  local allow_downgrade_json="$WORK_DIR/parsed/allow_downgrade.json"
+  [[ -f "$allow_downgrade_json" ]] || echo "[]" > "$allow_downgrade_json"
+  SCRIPT_LIB="$ROUTER_DIR/lib" python3 - "$manifest_name" "$ORIGINAL_FILE" "$CANDIDATE_FILE" "$allow_downgrade_json" "$ORIGINAL_EXISTS" > "$TEST_LOG" 2>&1 <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+sys.path.insert(0, os.environ["SCRIPT_LIB"])
+from validate_dependency_manifest import check
+
+manifest_name, original_path, candidate_path, allow_path, original_exists = sys.argv[1:6]
+original_text = pathlib.Path(original_path).read_text(encoding="utf-8") if original_exists == "1" else "{}"
+candidate_text = pathlib.Path(candidate_path).read_text(encoding="utf-8")
+allow_downgrade = json.loads(pathlib.Path(allow_path).read_text(encoding="utf-8"))
+check(manifest_name, original_text, candidate_text, allow_downgrade, label="contract-router")
+print("dependency manifest guard passed")
+PY
 }
 
 run_tests() {
@@ -859,6 +927,13 @@ run_tests() {
   if [[ "$preflight_rc" -ne 0 ]]; then
     LAST_FAILURE_TYPE="PREFLIGHT"
     return "$preflight_rc"
+  fi
+
+  run_dependency_guard
+  local dependency_rc=$?
+  if [[ "$dependency_rc" -ne 0 ]]; then
+    LAST_FAILURE_TYPE="DEPENDENCY_GUARD"
+    return "$dependency_rc"
   fi
 
   echo "contract-router: running verification" >&2
@@ -878,6 +953,8 @@ run_tests() {
     LAST_FAILURE_TYPE="TEST"
     if [[ "$TEST_EXIT" -eq 127 ]]; then
       HINT_MESSAGE="verification command binary not found (exit code 127; check PATH or use absolute path in test_command)"
+    elif [[ "$TEST_EXIT" -eq 124 || "$TEST_EXIT" -eq 142 ]]; then
+      HINT_MESSAGE="verification command timed out after ${TEST_TIMEOUT}s (DELEGATE_TEST_TIMEOUT); this looks like a stall rather than a normal test failure. The task may be too open-ended for a single-file contract -- narrow the instructions/test_command scope, split into a smaller per-file contract, or raise DELEGATE_TEST_TIMEOUT if the command is genuinely expected to run this long."
     fi
   fi
   return "$TEST_EXIT"
@@ -1009,6 +1086,9 @@ else
     PREFLIGHT_FAIL_COUNT=$((PREFLIGHT_FAIL_COUNT + 1))
     FINAL_STATUS=PREFLIGHT_FAIL
     [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="syntax preflight check failed"
+  elif [[ "$LAST_FAILURE_TYPE" == "DEPENDENCY_GUARD" ]]; then
+    FINAL_STATUS=DEPENDENCY_GUARD_FAIL
+    [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="dependency manifest guard failed (invalid version or unapproved downgrade)"
   elif [[ "$LAST_FAILURE_TYPE" == "TEST" ]]; then
     FINAL_STATUS=TEST_FAIL
     [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="verification command failed"
@@ -1028,6 +1108,9 @@ else
           PREFLIGHT_FAIL_COUNT=$((PREFLIGHT_FAIL_COUNT + 1))
           FINAL_STATUS=PREFLIGHT_FAIL
           [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="syntax preflight check failed"
+        elif [[ "$LAST_FAILURE_TYPE" == "DEPENDENCY_GUARD" ]]; then
+          FINAL_STATUS=DEPENDENCY_GUARD_FAIL
+          [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="dependency manifest guard failed (invalid version or unapproved downgrade)"
         elif [[ "$LAST_FAILURE_TYPE" == "TEST" ]]; then
           FINAL_STATUS=TEST_FAIL
           [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="verification command failed"

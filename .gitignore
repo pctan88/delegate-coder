@@ -19,6 +19,7 @@ node_modules/
 # Benchmark generated artifacts (keep RESULTS.md, not raw runs)
 benchmark/target-repo/
 benchmark/results/
+benchmark/**/*.log
 *.transcript.json
 *.stderr
 

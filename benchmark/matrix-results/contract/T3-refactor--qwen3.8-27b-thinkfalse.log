@@ -1,2 +1,0 @@
-Wrote additive local benchmark: benchmark/matrix-results/contract/T3-refactor--qwen3.8-27b-thinkfalse/20260819-115553-30457.jsonl
-Report: python3 /Users/pctan/Cowork/Workspace/AI/delegate-coder/benchmark/local_contract_report.py benchmark/matrix-results/contract/T3-refactor--qwen3.8-27b-thinkfalse/20260819-115553-30457.jsonl
