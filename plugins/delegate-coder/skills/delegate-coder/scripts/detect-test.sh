@@ -10,7 +10,11 @@ set -u
 DIR="${1:-.}"
 cd "$DIR" 2>/dev/null || exit 0
 
-# Helper to resolve python interpreter and print its test command
+# Helper to resolve python interpreter and print its test command.
+# NOTE: the lookup order (python before python3, no health probe) intentionally
+# differs from contract-router.sh's find_project_interpreter (python3 first,
+# probed with interpreter_works): this script only pre-fills a suggestion the
+# setup flow confirms, whereas the router must pick an interpreter that runs.
 emit_python_test_cmd() {
   local py_interpreter=""
   if [[ -x ".venv/bin/python" ]]; then

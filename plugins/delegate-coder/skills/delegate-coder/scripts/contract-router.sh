@@ -815,7 +815,10 @@ find_project_interpreter() {
     [[ -x "$candidate" ]] && interpreter_works "$candidate" && { echo "$candidate"; return 0; }
   done
   # python3 before bare python: python3 is the portable modern name, and bare
-  # python is the one most often shadowed by a broken shim.
+  # python is the one most often shadowed by a broken shim. NOTE: detect-test.sh
+  # deliberately differs (python before python3, no interpreter_works probe) —
+  # it only names a test command for a human-approved contract, while this
+  # function must hand run_preflight an interpreter that actually executes.
   for candidate in python3 python; do
     command -v "$candidate" >/dev/null 2>&1 && interpreter_works "$candidate" && { echo "$candidate"; return 0; }
   done
