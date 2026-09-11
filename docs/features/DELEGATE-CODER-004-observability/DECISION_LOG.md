@@ -38,3 +38,13 @@
   - Distinguish worker start/connection failures (`WORKER_START_FAIL`) in `contract-router.sh` when Ollama cannot be reached or returns malformed output, providing guidance hints (`Ensure Ollama is running...`).
   - Pass diagnostic hints (`hint`) and error descriptions (`error`) into `append_json_event` across all execution paths (contract router reports, missing agent, worker command failure, allow_paths guard violations, test binary missing 127).
 - **Rationale**: Gives operators immediate troubleshooting guidance in structured log records, eliminating guesswork during automated triage.
+
+## 2026-09-12: Fleet-Wide Log Aggregation and Granular Reporting (Phase 4)
+- **Context**: When working across multiple git worktrees and sibling repositories, developers previously saw only isolated local statistics (e.g. 2 tasks reported locally out of 41 actual runs). Retries inflated total counts, and pass rates did not distinguish between operational failures and test failures.
+- **Decision**:
+  - Upgrade `stats.sh` to accept multi-file arguments and auto-discover `.claude/delegate-coder.log` across git worktrees and sibling workspace folders via `--fleet` / `--all`.
+  - Distinguish logical tasks (`task_id` deduplication) from execution attempts (`run_id`).
+  - Surface status breakdowns (`status_breakdown`), pass rates, and token accounting (`prompt_eval_count` + `eval_count`).
+  - Provide a structured JSON export (`--json`) for automation.
+  - Retain default single-file human-readable output when invoked with no arguments for full backward compatibility.
+- **Rationale**: Unlocks transparent visibility across the full development fleet without breaking existing single-workspace workflows or benchmark scripts.

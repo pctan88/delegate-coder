@@ -7,6 +7,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
 DISPATCH="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/delegate.sh"
 DETECT_TEST="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/detect-test.sh"
+STATS="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/stats.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/delegate-coder-core-test.XXXXXX")"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 mkdir -p "$TEST_ROOT/home"
@@ -479,5 +480,75 @@ run_dispatch read "$legacy_task" >/dev/null 2>&1 || fail "legacy double quoted r
 arg_received="$(cat "$CASE_DIR/worker_arg1")"
 [[ "$arg_received" == "$legacy_task" ]] || fail "legacy double-quoted output corrupted: expected '$legacy_task' but got '$arg_received'"
 pass "command_override handles legacy double-quoted \"{task}\" correctly"
+
+# ── stats.sh: single log, multi-log fleet, --json export, and token stats ───
+setup_case stats_fleet_test
+LOG1="$CASE_DIR/.claude/delegate-coder.log"
+mkdir -p "$CASE_DIR/.claude"
+cat > "$LOG1" <<'JSONL'
+{"event":"start","agent":"codex","model":"gpt-4","mode":"exec","run_id":"r1","task_id":"t1","attempt":1,"ts":"2026-09-12T00:00:00Z"}
+{"event":"end","agent":"codex","model":"gpt-4","mode":"exec","run_id":"r1","task_id":"t1","attempt":1,"duration_s":10,"exit_code":0,"status":"PASS","ts":"2026-09-12T00:00:10Z"}
+{"event":"start","agent":"local-ollama","model":"qwen3-coder:30b","mode":"contract","run_id":"r2","task_id":"t2","attempt":1,"ts":"2026-09-12T00:01:00Z"}
+{"event":"end","agent":"local-ollama","model":"qwen3-coder:30b","mode":"contract","run_id":"r2","task_id":"t2","attempt":1,"duration_s":5,"exit_code":1,"status":"PREFLIGHT_FAIL","prompt_eval_count":100,"eval_count":50,"ts":"2026-09-12T00:01:05Z"}
+{"event":"start","agent":"local-ollama","model":"qwen3-coder:30b","mode":"contract","run_id":"r3","task_id":"t2","attempt":2,"parent_run_id":"r2","ts":"2026-09-12T00:01:10Z"}
+{"event":"end","agent":"local-ollama","model":"qwen3-coder:30b","mode":"contract","run_id":"r3","task_id":"t2","attempt":2,"duration_s":15,"exit_code":0,"status":"PASS","prompt_eval_count":150,"eval_count":80,"ts":"2026-09-12T00:01:25Z"}
+JSONL
+
+# Test 1: Single file default stats
+out1="$(bash "$STATS" "$LOG1")"
+contains_str() { grep -Fq -- "$2" <<< "$1" || fail "$3"; }
+contains_str "$out1" "Total delegations:  3" "stats.sh single file total delegations"
+contains_str "$out1" "Completions logged: 3" "stats.sh single file completions"
+contains_str "$out1" "Logical tasks:      2 (Attempts: 3)" "stats.sh logical tasks count"
+contains_str "$out1" "Pass rate:          66.7%" "stats.sh pass rate"
+contains_str "$out1" "PREFLIGHT_FAIL" "stats.sh status breakdown"
+contains_str "$out1" "Prompt tokens:     250" "stats.sh prompt token sum"
+pass "stats.sh single file summary with tasks, status breakdown, and tokens"
+
+# Test 2: JSON export mode
+out_json="$(bash "$STATS" --json "$LOG1")"
+python3 - "$out_json" <<'PY' || fail "stats.sh --json schema mismatch"
+import json, sys
+data = json.loads(sys.argv[1])
+assert data["total_delegations"] == 3
+assert data["completions_logged"] == 3
+assert data["logical_tasks"] == 2
+assert data["execution_attempts"] == 3
+assert data["pass_count"] == 2
+assert data["fail_count"] == 1
+assert data["pass_rate_pct"] == 66.7
+assert data["tokens"]["total_prompt_tokens"] == 250
+assert data["tokens"]["total_completion_tokens"] == 130
+assert data["status_breakdown"].get("PREFLIGHT_FAIL") == 1
+assert data["status_breakdown"].get("PASS") == 2
+assert len(data["breakdown"]) == 2
+PY
+pass "stats.sh --json valid schema and metrics"
+
+# Test 3: Multi-file fleet aggregation
+LOG2="$CASE_DIR/other_repo.log"
+cat > "$LOG2" <<'JSONL'
+{"event":"start","agent":"mimo","model":"mimo-v1","mode":"exec","run_id":"r4","task_id":"t3","attempt":1,"ts":"2026-09-12T00:02:00Z"}
+{"event":"end","agent":"mimo","model":"mimo-v1","mode":"exec","run_id":"r4","task_id":"t3","attempt":1,"duration_s":20,"exit_code":0,"status":"PASS","ts":"2026-09-12T00:02:20Z"}
+JSONL
+out_fleet_json="$(bash "$STATS" --json "$LOG1" "$LOG2")"
+python3 - "$out_fleet_json" <<'PY' || fail "stats.sh multi-file fleet aggregation failed"
+import json, sys
+data = json.loads(sys.argv[1])
+assert len(data["files"]) == 2
+assert data["total_delegations"] == 4
+assert data["completions_logged"] == 4
+assert data["logical_tasks"] == 3
+assert data["execution_attempts"] == 4
+assert data["pass_count"] == 3
+assert data["fail_count"] == 1
+assert data["pass_rate_pct"] == 75.0
+PY
+pass "stats.sh multi-file fleet aggregation"
+
+# Test 4: Missing log files handled gracefully
+out_empty="$(bash "$STATS" "$CASE_DIR/nonexistent.log")"
+contains_str "$out_empty" "No audit log found" "stats.sh missing log output"
+pass "stats.sh missing log handled gracefully"
 
 echo "# all $PASS checks passed"

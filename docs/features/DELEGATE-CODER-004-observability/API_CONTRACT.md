@@ -100,3 +100,55 @@ The log continues to be formatted as newline-delimited JSON (JSONL). Every recor
 |---|---|---|---|
 | `error` | String or `null` | `end` | Clear summary of failure reason (e.g. `Ollama request failed`, `Agent 'xyz' not found`, `syntax preflight check failed`), or `null` on `PASS`. |
 | `hint` | String or `null` | `end` | Actionable operational recommendation or diagnostic guidance for the failure (e.g. advice on missing binaries, invalid syntax retry limits, or allow_paths configuration), or `null` if not applicable. |
+
+## Fleet Aggregation & Stats Tool (`stats.sh` — Phase 4)
+
+### Command Syntax
+```bash
+stats.sh [--fleet|--all] [--json] [logfile1 logfile2 ...]
+```
+
+### Modes & Discovery
+- **Default mode**: `stats.sh` reads `.claude/delegate-coder.log` in the current working directory.
+- **Explicit files**: `stats.sh file1 file2 ...` aggregates the specified log files.
+- **Fleet mode (`--fleet` / `--all`)**: Auto-discovers `.claude/delegate-coder.log` across all git worktrees (`git worktree list`) and sibling workspace repositories (up to depth 3), deduplicating unique files.
+
+### JSON Output Schema (`--json`)
+```json
+{
+  "files": [".claude/delegate-coder.log"],
+  "total_delegations": 4,
+  "completions_logged": 4,
+  "logical_tasks": 4,
+  "execution_attempts": 4,
+  "legacy_entries": 0,
+  "pass_count": 1,
+  "fail_count": 3,
+  "pass_rate_pct": 25.0,
+  "status_breakdown": {
+    "PASS": 1,
+    "FAIL": 3
+  },
+  "tokens": {
+    "total_prompt_tokens": 320,
+    "total_completion_tokens": 854,
+    "total_tokens": 1174
+  },
+  "breakdown": [
+    {
+      "agent": "local-ollama",
+      "mode": "contract",
+      "count": 2,
+      "success": 1,
+      "failed": 1,
+      "avg_duration_s": 10.5,
+      "statuses": {
+        "PASS": 1,
+        "FAIL": 1
+      },
+      "prompt_tokens": 320,
+      "completion_tokens": 854
+    }
+  ]
+}
+```
