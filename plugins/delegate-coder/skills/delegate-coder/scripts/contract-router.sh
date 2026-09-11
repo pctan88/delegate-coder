@@ -303,10 +303,39 @@ PY
   done < "$BATCH_MANIFEST"
 
   [[ "$BATCH_FAILED" -eq 0 ]] && BATCH_SKIPPED=0
+  local batch_targets_json batch_changed_count batch_commit_sha batch_test_cmd
+  batch_targets_json="$(python3 - "$BATCH_MANIFEST" <<'PY'
+import json, pathlib, sys
+manifest = pathlib.Path(sys.argv[1]).read_text().splitlines()
+targets = []
+for p in manifest:
+    if p.strip():
+        data = json.loads(pathlib.Path(p.strip()).read_text())
+        t = data.get("target_file")
+        if t and t not in targets:
+            targets.append(t)
+print(json.dumps(targets))
+PY
+)"
+  batch_changed_count="$BATCH_COMPLETED"
+  batch_commit_sha="null"
+  if [[ "$BATCH_FAILED" -eq 0 ]]; then
+    if [[ -z "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all 2>/dev/null)" ]]; then
+      batch_commit_sha="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || echo "null")"
+    fi
+  fi
+  batch_test_cmd="null"
+
   {
     printf '# Contract Batch Result\n\n'
     [[ "$BATCH_FAILED" -eq 0 ]] && printf -- '- Status: PASS\n' || printf -- '- Status: FAIL\n'
     printf -- '- Branch: %s\n' "$BRANCH_NAME"
+    printf -- '- Repo: %s\n' "$(basename "$ROOT_DIR")"
+    printf -- '- Git root: %s\n' "$ROOT_DIR"
+    printf -- '- Target files: %s\n' "$batch_targets_json"
+    printf -- '- Test command: %s\n' "$batch_test_cmd"
+    printf -- '- Commit SHA: %s\n' "$batch_commit_sha"
+    printf -- '- Changed files count: %s\n' "$batch_changed_count"
     printf -- '- Completed: %s\n' "$BATCH_COMPLETED"
     printf -- '- Failed: %s\n' "$BATCH_FAILED"
     printf -- '- Skipped: %s\n' "$BATCH_SKIPPED"
@@ -1034,11 +1063,31 @@ emit_report() {
     fi
   fi
   build_candidate_diff
+  local single_target_json single_changed_count single_commit_sha
+  if command -v python3 >/dev/null 2>&1; then
+    single_target_json="$(python3 -c 'import json, sys; print(json.dumps([sys.argv[1]]))' "$TARGET_FILE")"
+  else
+    single_target_json="[\"$TARGET_FILE\"]"
+  fi
+  single_changed_count="$([[ "$ACCEPTED" -eq 1 ]] && echo 1 || echo 0)"
+  single_commit_sha="null"
+  if [[ "$ACCEPTED" -eq 1 ]]; then
+    if [[ -z "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all 2>/dev/null)" ]]; then
+      single_commit_sha="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || echo "null")"
+    fi
+  fi
+
   printf '# Contract Result\n\n'
   printf -- '- Status: %s\n' "$FINAL_STATUS"
   printf -- '- Retries: %s\n' "$RETRY_COUNT"
   printf -- '- Target: %s\n' "$TARGET_FILE"
+  printf -- '- Target files: %s\n' "$single_target_json"
   printf -- '- Branch: %s\n' "$BRANCH_NAME"
+  printf -- '- Repo: %s\n' "$(basename "$ROOT_DIR")"
+  printf -- '- Git root: %s\n' "$ROOT_DIR"
+  printf -- '- Test command: %s\n' "$TEST_COMMAND"
+  printf -- '- Commit SHA: %s\n' "$single_commit_sha"
+  printf -- '- Changed files count: %s\n' "$single_changed_count"
   printf -- '- Restored: %s\n' "$([[ "$RESTORED" -eq 1 ]] && echo true || echo false)"
   printf -- '- Candidate accepted: %s\n' "$([[ "$ACCEPTED" -eq 1 ]] && echo true || echo false)"
   [[ -n "$SAVED_CANDIDATE_PATH" ]] && printf -- '- Worker candidate saved to: %s\n' "$SAVED_CANDIDATE_PATH"

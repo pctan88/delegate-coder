@@ -1,6 +1,6 @@
-# Decision Log: Observability Phase 1 (DELEGATE-CODER-004)
+# Decision Log: Observability (DELEGATE-CODER-004)
 
-## 2026-09-11: Additive Schema & Backward Compatibility
+## 2026-09-11: Additive Schema & Backward Compatibility (Phase 1)
 - **Context**: The existing audit log `.claude/delegate-coder.log` is consumed by `stats.sh` and benchmark harnesses, which expect fields like `exit_code`, `duration_s`, and `event`.
 - **Decision**: Keep all existing keys intact and preserve JSONL output format. Correlation IDs (`run_id`, `task_id`, `attempt`, `parent_run_id`) and `status` are added at the root level of the JSON record.
 - **Rationale**: Ensures zero breakage to existing tooling and benchmark workflows while enabling correlated tracing.
@@ -19,3 +19,15 @@
 - **Context**: `contract-router.sh` previously mapped multiple failure modes (syntax errors, test failures, timeouts, dependency violations) into coarse `FAIL` or `TEST_FAIL`. Similarly, `delegate.sh` did not log when an agent failed to start.
 - **Decision**: Standardize on a unified status enum (`PASS`, `NOOP`, `PREFLIGHT_FAIL`, `DEPENDENCY_GUARD_FAIL`, `TEST_FAIL`, `TIMEOUT`, `WORKER_START_FAIL`, `RESTORE_FAIL`, `ERROR`). Classify timeout exits (124/142) as `TIMEOUT`, outside worktree modifications as `DEPENDENCY_GUARD_FAIL`, restore errors as `RESTORE_FAIL`, and missing/empty worker exits as `WORKER_START_FAIL`.
 - **Rationale**: Distinguishes operational/environment failures from code-generation flaws, revealing the true accuracy of models like local Qwen and Codex.
+
+## 2026-09-11: Structured Context Metadata (Phase 2)
+- **Context**: Across multi-repo workspaces and worktrees, logs lacked context on which repository was targeted, what branch was used, which target files were modified, what verification test was run, and how many files changed.
+- **Decision**: Add 7 context fields to audit records:
+  - `repo`: Repository basename (`null` outside Git).
+  - `git_root`: Canonical absolute path (`null` outside Git).
+  - `branch`: Current branch name (`null` if detached HEAD / unborn).
+  - `target_files`: JSON array of relative paths (contract targets, batch targets, or modified files in exec mode; `[]` in read mode).
+  - `test_command`: Test command string (`null` if none/not applicable).
+  - `commit_sha`: Git commit SHA of accepted change if committed on PASS, else `null`.
+  - `changed_file_count`: Modified file count (e.g. 1 on accepted contract, 0 on NOOP or failure rollback).
+- **Rationale**: Enables fleet-wide aggregation across worktrees and repos without parsing unstructured text reports, while maintaining strict backward compatibility.

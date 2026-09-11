@@ -11,6 +11,16 @@ export PATH="$EXTRA_PATHS:$COMMON_DIRS:$PATH"
 MODE="${1:-}"
 TASK="${2:-}"
 DELEGATE_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo ".")"
+if [[ "$DELEGATE_ROOT" != "." && -d "$DELEGATE_ROOT" ]]; then
+  DELEGATE_GIT_ROOT="$(cd "$DELEGATE_ROOT" && pwd -P)"
+  DELEGATE_REPO="$(basename "$DELEGATE_GIT_ROOT")"
+  DELEGATE_BRANCH="$(git branch --show-current 2>/dev/null || true)"
+  [[ -n "$DELEGATE_BRANCH" ]] || DELEGATE_BRANCH=""
+else
+  DELEGATE_GIT_ROOT=""
+  DELEGATE_REPO=""
+  DELEGATE_BRANCH=""
+fi
 CONFIG="$DELEGATE_ROOT/.delegate-coder/config.json"
 LEGACY_CONFIG="$DELEGATE_ROOT/.claude/delegate-coder.json"
 if [[ ! -f "$CONFIG" && -f "$LEGACY_CONFIG" ]]; then
@@ -61,7 +71,8 @@ append_json_event() {
   mkdir -p "$(dirname "$logfile")" 2>/dev/null || return 0
   if command -v python3 >/dev/null 2>&1; then
     python3 - "$logfile" "$agent" "$model" "$mode" "$event" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-      "$DELEGATE_RUN_ID" "$DELEGATE_TASK_ID" "$DELEGATE_ATTEMPT" "$DELEGATE_PARENT_RUN_ID" "$@" <<'PY'
+      "$DELEGATE_RUN_ID" "$DELEGATE_TASK_ID" "$DELEGATE_ATTEMPT" "$DELEGATE_PARENT_RUN_ID" \
+      "${DELEGATE_REPO:-}" "${DELEGATE_GIT_ROOT:-}" "${DELEGATE_BRANCH:-}" "$@" <<'PY'
 import json
 import pathlib
 import sys
@@ -76,6 +87,10 @@ parent_run_id = sys.argv[10]
 if parent_run_id in ("", "None", "null"):
     parent_run_id = None
 
+repo = sys.argv[11] or None
+git_root = sys.argv[12] or None
+branch = sys.argv[13] or None
+
 record = {
     "run_id": run_id,
     "task_id": task_id,
@@ -86,22 +101,44 @@ record = {
     "model": sys.argv[3],
     "mode": sys.argv[4],
     "event": sys.argv[5],
+    "repo": repo,
+    "git_root": git_root,
+    "branch": branch,
+    "target_files": [],
+    "test_command": None,
+    "commit_sha": None,
+    "changed_file_count": 0,
 }
-extra = sys.argv[11:]
+extra = sys.argv[14:]
 for index in range(0, len(extra), 2):
     key, value = extra[index:index + 2]
-    if key in {"duration_s", "exit_code", "retries", "attempt", "total_duration", "load_duration", "prompt_eval_count", "prompt_eval_duration", "eval_count", "eval_duration"}:
+    if key in {"duration_s", "exit_code", "retries", "attempt", "total_duration", "load_duration", "prompt_eval_count", "prompt_eval_duration", "eval_count", "eval_duration", "changed_file_count"}:
         try:
             record[key] = int(value)
         except ValueError:
             try:
                 record[key] = float(value)
             except ValueError:
-                record[key] = None if value == "None" else value
-    elif key in {"run_id", "task_id"}:
+                record[key] = None if value in ("", "None", "null") else value
+    elif key in {"run_id", "task_id", "parent_run_id", "repo", "git_root", "branch", "test_command", "commit_sha", "error", "hint"}:
         record[key] = None if value in ("", "None", "null") else value
-    elif key == "parent_run_id":
-        record[key] = None if value in ("", "None", "null") else value
+    elif key == "target_files":
+        if isinstance(value, str):
+            value = value.strip()
+            if value.startswith("[") and value.endswith("]"):
+                try:
+                    parsed = json.loads(value)
+                    record[key] = parsed if isinstance(parsed, list) else [parsed]
+                except Exception:
+                    record[key] = [value] if value else []
+            elif value in ("", "None", "null"):
+                record[key] = []
+            else:
+                record[key] = [value]
+        elif isinstance(value, list):
+            record[key] = value
+        else:
+            record[key] = []
     elif key == "restored":
         record[key] = value == "true"
     else:
@@ -112,7 +149,8 @@ PY
   elif command -v jq >/dev/null 2>&1; then
     jq -n --arg ts "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" --arg agent "$agent" --arg model "$model" --arg mode "$mode" --arg event "$event" \
       --arg run_id "$DELEGATE_RUN_ID" --arg task_id "$DELEGATE_TASK_ID" --argjson attempt "${DELEGATE_ATTEMPT:-1}" --arg parent_run_id "${DELEGATE_PARENT_RUN_ID:-}" \
-      '{run_id:(if $run_id=="" then null else $run_id end),task_id:(if $task_id=="" then null else $task_id end),attempt:$attempt,parent_run_id:(if $parent_run_id=="" then null else $parent_run_id end),ts:$ts,agent:$agent,model:$model,mode:$mode,event:$event}' >> "$logfile"
+      --arg repo "${DELEGATE_REPO:-}" --arg git_root "${DELEGATE_GIT_ROOT:-}" --arg branch "${DELEGATE_BRANCH:-}" \
+      '{run_id:(if $run_id=="" then null else $run_id end),task_id:(if $task_id=="" then null else $task_id end),attempt:$attempt,parent_run_id:(if $parent_run_id=="" then null else $parent_run_id end),ts:$ts,agent:$agent,model:$model,mode:$mode,event:$event,repo:(if $repo=="" then null else $repo end),git_root:(if $git_root=="" then null else $git_root end),branch:(if $branch=="" then null else $branch end),target_files:[],test_command:null,commit_sha:null,changed_file_count:0}' >> "$logfile"
   fi
 }
 
@@ -353,8 +391,17 @@ if [[ "$MODE" == "contract" ]]; then
   CONTRACT_RESTORED="$(report_value Restored "$CONTRACT_REPORT")"
   CONTRACT_ERROR="$(report_value Error "$CONTRACT_REPORT")"
   CONTRACT_BRANCH="$(report_value Branch "$CONTRACT_REPORT")"
+  CONTRACT_REPORT_REPO="$(report_value Repo "$CONTRACT_REPORT")"
+  CONTRACT_REPORT_GIT_ROOT="$(report_value 'Git root' "$CONTRACT_REPORT")"
+  CONTRACT_TARGET_FILES="$(report_value 'Target files' "$CONTRACT_REPORT")"
+  CONTRACT_TEST_COMMAND="$(report_value 'Test command' "$CONTRACT_REPORT")"
+  CONTRACT_COMMIT_SHA="$(report_value 'Commit SHA' "$CONTRACT_REPORT")"
+  CONTRACT_CHANGED_COUNT="$(report_value 'Changed files count' "$CONTRACT_REPORT")"
   append_json_event "$CONTRACT_LOGFILE" local-ollama "$CONTRACT_MODEL" contract end \
-    duration_s "$(( $(date +%s) - CONTRACT_T0 ))" exit_code "$CONTRACT_EXIT" status "$CONTRACT_STATUS" retries "$CONTRACT_RETRIES" restored "${CONTRACT_RESTORED:-false}" branch "${CONTRACT_BRANCH:-$CONTRACT_BRANCH}" error "$CONTRACT_ERROR" \
+    duration_s "$(( $(date +%s) - CONTRACT_T0 ))" exit_code "$CONTRACT_EXIT" status "$CONTRACT_STATUS" retries "$CONTRACT_RETRIES" restored "${CONTRACT_RESTORED:-false}" \
+    repo "${CONTRACT_REPORT_REPO:-$DELEGATE_REPO}" git_root "${CONTRACT_REPORT_GIT_ROOT:-$DELEGATE_GIT_ROOT}" branch "${CONTRACT_BRANCH:-$DELEGATE_BRANCH}" \
+    target_files "${CONTRACT_TARGET_FILES:-[]}" test_command "${CONTRACT_TEST_COMMAND:-None}" commit_sha "${CONTRACT_COMMIT_SHA:-None}" changed_file_count "${CONTRACT_CHANGED_COUNT:-0}" \
+    error "$CONTRACT_ERROR" \
     total_duration "$(report_value 'Ollama total_duration' "$CONTRACT_REPORT")" load_duration "$(report_value 'Ollama load_duration' "$CONTRACT_REPORT")" prompt_eval_count "$(report_value 'Ollama prompt_eval_count' "$CONTRACT_REPORT")" prompt_eval_duration "$(report_value 'Ollama prompt_eval_duration' "$CONTRACT_REPORT")" eval_count "$(report_value 'Ollama eval_count' "$CONTRACT_REPORT")" eval_duration "$(report_value 'Ollama eval_duration' "$CONTRACT_REPORT")"
   rm -f "$CONTRACT_REPORT"
   exit "$CONTRACT_EXIT"

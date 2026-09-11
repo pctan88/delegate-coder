@@ -232,6 +232,12 @@ assert start.get("task_id") == end.get("task_id"), "task_id must match across st
 assert start.get("attempt") == 1 and end.get("attempt") == 1, "attempt should be 1"
 assert start.get("parent_run_id") is None and end.get("parent_run_id") is None, "parent_run_id should be None"
 assert end.get("status") == "PASS", f"expected status PASS, got {end.get('status')}"
+assert start.get("repo") == "valid" and end.get("repo") == "valid", "repo must match case directory basename"
+assert start.get("git_root") is not None and end.get("git_root") is not None, "git_root must be set"
+assert start.get("branch") is not None and end.get("branch") is not None, "branch must be set"
+assert end.get("target_files") == ["target.txt"], f"expected target_files ['target.txt'], got {end.get('target_files')}"
+assert end.get("test_command") == "grep -q '^good$' target.txt", f"unexpected test_command: {end.get('test_command')}"
+assert end.get("changed_file_count") == 1, f"expected changed_file_count 1, got {end.get('changed_file_count')}"
 PY
 pass "valid JSON contract and clean report"
 VALID_DIR="$CASE_DIR"

@@ -220,7 +220,9 @@ contains "$LOG" '"agent":"codex"' "audit log should record agent"
 jq -e 'select(.event=="end") | .exit_code == 0' "$LOG" >/dev/null 2>&1 || fail "end event should carry exit_code"
 jq -e 'select(.event=="start") | .run_id != null and .task_id != null and .attempt == 1 and .parent_run_id == null' "$LOG" >/dev/null 2>&1 || fail "start event should carry correlation fields"
 jq -e 'select(.event=="end") | .run_id != null and .task_id != null and .attempt == 1 and .status == "PASS"' "$LOG" >/dev/null 2>&1 || fail "end event should carry correlation fields and status PASS"
-pass "audit log records start/end with agent, exit_code, and correlation metadata"
+jq -e 'select(.event=="start") | .repo == "audit" and .git_root != null and .branch != null and .target_files == [] and .changed_file_count == 0' "$LOG" >/dev/null 2>&1 || fail "start event should carry context metadata"
+jq -e 'select(.event=="end") | .repo == "audit" and .git_root != null and .branch != null and .target_files == [] and .changed_file_count == 0 and .test_command == null and .commit_sha == null' "$LOG" >/dev/null 2>&1 || fail "end event should carry context metadata"
+pass "audit log records start/end with agent, exit_code, correlation, and context metadata"
 
 # ── delegate.sh: explicit DELEGATE_TASK_ID propagation ───────────────────
 setup_case audit_task_id

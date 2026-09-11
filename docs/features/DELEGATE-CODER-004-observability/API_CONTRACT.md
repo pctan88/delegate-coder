@@ -16,7 +16,9 @@ The log continues to be formatted as newline-delimited JSON (JSONL). Every recor
   "task_id": "8a0ef921-b3b4-4b55-a222-9876543210ab",
   "attempt": 1,
   "parent_run_id": null,
-  "branch": "delegate/contract-20260911-071500-12345"
+  "branch": "delegate/contract-20260911-071500-12345",
+  "repo": "delegate-coder",
+  "git_root": "/Users/user/workspace/delegate-coder"
 }
 ```
 
@@ -38,6 +40,14 @@ The log continues to be formatted as newline-delimited JSON (JSONL). Every recor
   "retries": 0,
   "restored": false,
   "branch": "delegate/contract-20260911-071500-12345",
+  "repo": "delegate-coder",
+  "git_root": "/Users/user/workspace/delegate-coder",
+  "target_files": [
+    "src/target.py"
+  ],
+  "test_command": "pytest tests/test_target.py",
+  "commit_sha": null,
+  "changed_file_count": 1,
   "error": "",
   "total_duration": 28000000000,
   "load_duration": 15000000,
@@ -70,3 +80,15 @@ The log continues to be formatted as newline-delimited JSON (JSONL). Every recor
 | `WORKER_START_FAIL` | Worker binary not found (exit 127), missing executable, or process failed immediately with 0 bytes output. | 4 (or 127) | Yes |
 | `RESTORE_FAIL` | An error occurred attempting to restore worktree snapshot or index during rollback. | 1 | Attempted |
 | `ERROR` | Unclassified script execution failure or contract parsing error. | Non-zero | Yes |
+
+## Context Metadata Fields (Phase 2)
+
+| Field | Type | Events | Description |
+|---|---|---|---|
+| `repo` | String or `null` | `start`, `end` | Repository directory basename (e.g. `delegate-coder`), or `null` if outside git repository. |
+| `git_root` | String or `null` | `start`, `end` | Absolute canonical path to the root of the git repository worktree, or `null` if outside git repository. |
+| `branch` | String or `null` | `start`, `end` | Current git branch name, or `null` if detached HEAD or unborn branch. |
+| `target_files` | Array of Strings | `end` | JSON array of relative target file paths within the repository (e.g. `["src/target.py"]`). In `read` mode or failed start, defaults to `[]`. |
+| `test_command` | String or `null` | `end` | Verification command string executed, or `null` if not applicable / read mode. |
+| `commit_sha` | String or `null` | `end` | Git commit SHA (40 hex characters) of accepted change on `PASS` if committed, or `null` if uncommitted / non-PASS / rolled back. |
+| `changed_file_count` | Integer | `end` | Integer count of modified files in repository (e.g. 1 on accepted contract, 0 on NOOP or failure rollback). |
