@@ -216,10 +216,42 @@ DELEGATE_AGENT=codex run_dispatch read "understand" >/dev/null 2>&1 || fail "aud
 LOG="$CASE_DIR/.claude/delegate-coder.log"
 [[ -f "$LOG" ]] || fail "audit log should be created"
 contains "$LOG" '"event":"start"' "audit log should record start"
-contains "$LOG" '"event":"end"' "audit log should record end"
 contains "$LOG" '"agent":"codex"' "audit log should record agent"
 jq -e 'select(.event=="end") | .exit_code == 0' "$LOG" >/dev/null 2>&1 || fail "end event should carry exit_code"
-pass "audit log records start/end with agent and exit_code"
+jq -e 'select(.event=="start") | .run_id != null and .task_id != null and .attempt == 1 and .parent_run_id == null' "$LOG" >/dev/null 2>&1 || fail "start event should carry correlation fields"
+jq -e 'select(.event=="end") | .run_id != null and .task_id != null and .attempt == 1 and .status == "PASS"' "$LOG" >/dev/null 2>&1 || fail "end event should carry correlation fields and status PASS"
+pass "audit log records start/end with agent, exit_code, and correlation metadata"
+
+# ── delegate.sh: explicit DELEGATE_TASK_ID propagation ───────────────────
+setup_case audit_task_id
+CUSTOM_TASK_ID="12345678-1234-5678-1234-567812345678"
+DELEGATE_AGENT=codex DELEGATE_TASK_ID="$CUSTOM_TASK_ID" run_dispatch read "understand" >/dev/null 2>&1 || fail "audit with task_id run failed"
+LOG="$CASE_DIR/.claude/delegate-coder.log"
+jq -e --arg tid "$CUSTOM_TASK_ID" 'select(.event=="start") | .task_id == $tid' "$LOG" >/dev/null 2>&1 || fail "start event should preserve DELEGATE_TASK_ID"
+jq -e --arg tid "$CUSTOM_TASK_ID" 'select(.event=="end") | .task_id == $tid' "$LOG" >/dev/null 2>&1 || fail "end event should preserve DELEGATE_TASK_ID"
+pass "audit log preserves explicit DELEGATE_TASK_ID"
+
+# ── delegate.sh: missing agent logs WORKER_START_FAIL ─────────────────────
+setup_case missing_agent_audit
+mkdir -p "$CASE_DIR/.claude"
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
+{ "agent": "delegate_coder_missing_agent_9fd0d3", "fallback": "graceful" }
+JSON
+run_dispatch exec "do it" >/dev/null 2>&1 || true
+LOG="$CASE_DIR/.claude/delegate-coder.log"
+jq -e 'select(.event=="end") | .status == "WORKER_START_FAIL" and .exit_code == 4' "$LOG" >/dev/null 2>&1 || fail "missing agent should log WORKER_START_FAIL with exit 4"
+pass "missing agent logs start and end with WORKER_START_FAIL"
+
+# ── delegate.sh: allow_paths violation logs DEPENDENCY_GUARD_FAIL ─────────
+setup_case allow_paths_audit
+mkdir -p "$CASE_DIR/.claude"
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
+{ "agent": "codex", "allow_paths": ["lib/"] }
+JSON
+FAKE_TOUCH="$CASE_DIR/src/other.txt" DELEGATE_AGENT=codex run_dispatch exec "edit" >/dev/null 2>&1 || true
+LOG="$CASE_DIR/.claude/delegate-coder.log"
+jq -e 'select(.event=="end" and .exit_code == 6) | .status == "DEPENDENCY_GUARD_FAIL"' "$LOG" >/dev/null 2>&1 || fail "allow_paths failure should log DEPENDENCY_GUARD_FAIL with exit 6"
+pass "allow_paths violation logs DEPENDENCY_GUARD_FAIL"
 
 # ── detect-test.sh: per-ecosystem inference ───────────────────────────────
 dt() { ( cd "$1" && bash "$DETECT_TEST" ); }

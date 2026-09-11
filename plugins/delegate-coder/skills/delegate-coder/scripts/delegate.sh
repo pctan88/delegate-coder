@@ -42,26 +42,55 @@ PY
   fi
 }
 
+DELEGATE_TASK_ID="${DELEGATE_TASK_ID:-}"
+if [[ -z "$DELEGATE_TASK_ID" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    DELEGATE_TASK_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+  fi
+fi
+DELEGATE_RUN_ID=""
+if command -v python3 >/dev/null 2>&1; then
+  DELEGATE_RUN_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+fi
+DELEGATE_ATTEMPT="${DELEGATE_ATTEMPT:-1}"
+DELEGATE_PARENT_RUN_ID="${DELEGATE_PARENT_RUN_ID:-}"
+
 append_json_event() {
   local logfile="$1" agent="$2" model="$3" mode="$4" event="$5"
   shift 5
   mkdir -p "$(dirname "$logfile")" 2>/dev/null || return 0
   if command -v python3 >/dev/null 2>&1; then
-    python3 - "$logfile" "$agent" "$model" "$mode" "$event" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$@" <<'PY'
+    python3 - "$logfile" "$agent" "$model" "$mode" "$event" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+      "$DELEGATE_RUN_ID" "$DELEGATE_TASK_ID" "$DELEGATE_ATTEMPT" "$DELEGATE_PARENT_RUN_ID" "$@" <<'PY'
 import json
 import pathlib
 import sys
+
+run_id = sys.argv[7] or None
+task_id = sys.argv[8] or None
+try:
+    attempt = int(sys.argv[9])
+except (ValueError, TypeError):
+    attempt = 1
+parent_run_id = sys.argv[10]
+if parent_run_id in ("", "None", "null"):
+    parent_run_id = None
+
 record = {
+    "run_id": run_id,
+    "task_id": task_id,
+    "attempt": attempt,
+    "parent_run_id": parent_run_id,
     "ts": sys.argv[6],
     "agent": sys.argv[2],
     "model": sys.argv[3],
     "mode": sys.argv[4],
     "event": sys.argv[5],
 }
-extra = sys.argv[7:]
+extra = sys.argv[11:]
 for index in range(0, len(extra), 2):
     key, value = extra[index:index + 2]
-    if key in {"duration_s", "exit_code", "retries", "total_duration", "load_duration", "prompt_eval_count", "prompt_eval_duration", "eval_count", "eval_duration"}:
+    if key in {"duration_s", "exit_code", "retries", "attempt", "total_duration", "load_duration", "prompt_eval_count", "prompt_eval_duration", "eval_count", "eval_duration"}:
         try:
             record[key] = int(value)
         except ValueError:
@@ -69,6 +98,10 @@ for index in range(0, len(extra), 2):
                 record[key] = float(value)
             except ValueError:
                 record[key] = None if value == "None" else value
+    elif key in {"run_id", "task_id"}:
+        record[key] = None if value in ("", "None", "null") else value
+    elif key == "parent_run_id":
+        record[key] = None if value in ("", "None", "null") else value
     elif key == "restored":
         record[key] = value == "true"
     else:
@@ -78,7 +111,8 @@ with pathlib.Path(sys.argv[1]).open("a") as output:
 PY
   elif command -v jq >/dev/null 2>&1; then
     jq -n --arg ts "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" --arg agent "$agent" --arg model "$model" --arg mode "$mode" --arg event "$event" \
-      '{ts:$ts,agent:$agent,model:$model,mode:$mode,event:$event}' >> "$logfile"
+      --arg run_id "$DELEGATE_RUN_ID" --arg task_id "$DELEGATE_TASK_ID" --argjson attempt "${DELEGATE_ATTEMPT:-1}" --arg parent_run_id "${DELEGATE_PARENT_RUN_ID:-}" \
+      '{run_id:(if $run_id=="" then null else $run_id end),task_id:(if $task_id=="" then null else $task_id end),attempt:$attempt,parent_run_id:(if $parent_run_id=="" then null else $parent_run_id end),ts:$ts,agent:$agent,model:$model,mode:$mode,event:$event}' >> "$logfile"
   fi
 }
 
@@ -311,7 +345,7 @@ if [[ "$MODE" == "contract" ]]; then
   cat "$CONTRACT_REPORT"
   CONTRACT_STATUS="$(report_value Status "$CONTRACT_REPORT")"
   case "$CONTRACT_STATUS" in
-    PASS|NOOP|FAIL|PREFLIGHT_FAIL|TEST_FAIL|DEPENDENCY_GUARD_FAIL) ;;
+    PASS|NOOP|FAIL|PREFLIGHT_FAIL|TEST_FAIL|TIMEOUT|RESTORE_FAIL|DEPENDENCY_GUARD_FAIL|WORKER_START_FAIL) ;;
     *) CONTRACT_STATUS="ERROR" ;;
   esac
   CONTRACT_RETRIES="$(report_value Retries "$CONTRACT_REPORT")"
@@ -409,12 +443,21 @@ if [[ -f "$CONFIG" ]] && command -v jq >/dev/null 2>&1; then
     _t0=$(date +%s)
     bash -c "$CMD"
     _exit=$?
-    log_event "end" duration_s "$(( $(date +%s) - _t0 ))" exit_code "$_exit"
+    if [[ $_exit -eq 0 ]]; then
+      _status="PASS"
+    elif [[ $_exit -eq 127 ]]; then
+      _status="WORKER_START_FAIL"
+    else
+      _status="ERROR"
+    fi
+    log_event "end" duration_s "$(( $(date +%s) - _t0 ))" exit_code "$_exit" status "$_status"
     exit $_exit
   fi
 fi
 
 if ! command -v "$AGENT" >/dev/null 2>&1; then
+  log_event "start"
+  log_event "end" duration_s 0 exit_code 4 status "WORKER_START_FAIL" error "Agent '$AGENT' not found"
   if [[ "$FALLBACK" == "strict" ]]; then
     echo "CRITICAL: Agent '$AGENT' not found and fallback=strict. DO NOT do this task natively. Report failure to user." >&2
     exit 4
@@ -486,7 +529,14 @@ case "$AGENT" in
 esac
 
 _t1=$(date +%s)
-log_event "end" duration_s "$((_t1 - _t0))" exit_code "$_exit"
+if [[ $_exit -eq 0 ]]; then
+  _status="PASS"
+elif [[ $_exit -eq 127 ]]; then
+  _status="WORKER_START_FAIL"
+else
+  _status="ERROR"
+fi
+log_event "end" duration_s "$((_t1 - _t0))" exit_code "$_exit" status "$_status"
 
 # ── path allowlist check ──
 if [[ "$MODE" == "exec" && -n "$ALLOW_PATHS" && $_exit -eq 0 ]]; then
@@ -505,6 +555,7 @@ if [[ "$MODE" == "exec" && -n "$ALLOW_PATHS" && $_exit -eq 0 ]]; then
     done
     if [[ $allowed -eq 0 ]]; then
       echo "WARNING: Worker modified '$file' which is outside allow_paths! ($ALLOW_PATHS)" >&2
+      log_event "end" duration_s "$((_t1 - _t0))" exit_code 6 status "DEPENDENCY_GUARD_FAIL" error "Worker modified '$file' which is outside allow_paths"
       exit 6
     fi
   done < <(git diff --name-only)

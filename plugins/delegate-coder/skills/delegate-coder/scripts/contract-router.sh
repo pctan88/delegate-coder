@@ -953,11 +953,16 @@ run_tests() {
   fi
   TEST_EXIT=$?
   if [[ "$TEST_EXIT" -ne 0 ]]; then
-    LAST_FAILURE_TYPE="TEST"
-    if [[ "$TEST_EXIT" -eq 127 ]]; then
-      HINT_MESSAGE="verification command binary not found (exit code 127; check PATH or use absolute path in test_command)"
-    elif [[ "$TEST_EXIT" -eq 124 || "$TEST_EXIT" -eq 142 ]]; then
+    if [[ "$TEST_EXIT" -eq 124 || "$TEST_EXIT" -eq 142 ]]; then
+      LAST_FAILURE_TYPE="TIMEOUT"
+      ERROR_MESSAGE="verification command timed out after ${TEST_TIMEOUT}s"
       HINT_MESSAGE="verification command timed out after ${TEST_TIMEOUT}s (DELEGATE_TEST_TIMEOUT); this looks like a stall rather than a normal test failure. The task may be too open-ended for a single-file contract -- narrow the instructions/test_command scope, split into a smaller per-file contract, or raise DELEGATE_TEST_TIMEOUT if the command is genuinely expected to run this long."
+    else
+      LAST_FAILURE_TYPE="TEST"
+      if [[ "$TEST_EXIT" -eq 127 ]]; then
+        HINT_MESSAGE="verification command binary not found (exit code 127; check PATH or use absolute path in test_command)"
+      fi
+    fi
     fi
   fi
   return "$TEST_EXIT"
@@ -1022,7 +1027,10 @@ emit_report() {
       cp "$CANDIDATE_FILE" "$SAVED_CANDIDATE_PATH"
     fi
     if [[ "$SNAPSHOT_READY" -eq 1 ]] && worktree_needs_restore; then
-      restore_worktree || ERROR_MESSAGE="could not restore worktree after failure"
+      if ! restore_worktree; then
+        FINAL_STATUS=RESTORE_FAIL
+        ERROR_MESSAGE="could not restore worktree after failure"
+      fi
     fi
   fi
   build_candidate_diff
@@ -1092,6 +1100,9 @@ else
   elif [[ "$LAST_FAILURE_TYPE" == "DEPENDENCY_GUARD" ]]; then
     FINAL_STATUS=DEPENDENCY_GUARD_FAIL
     [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="dependency manifest guard failed (invalid version or unapproved downgrade)"
+  elif [[ "$LAST_FAILURE_TYPE" == "TIMEOUT" ]]; then
+    FINAL_STATUS=TIMEOUT
+    [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="verification command timed out"
   elif [[ "$LAST_FAILURE_TYPE" == "TEST" ]]; then
     FINAL_STATUS=TEST_FAIL
     [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="verification command failed"
@@ -1114,6 +1125,9 @@ else
         elif [[ "$LAST_FAILURE_TYPE" == "DEPENDENCY_GUARD" ]]; then
           FINAL_STATUS=DEPENDENCY_GUARD_FAIL
           [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="dependency manifest guard failed (invalid version or unapproved downgrade)"
+        elif [[ "$LAST_FAILURE_TYPE" == "TIMEOUT" ]]; then
+          FINAL_STATUS=TIMEOUT
+          [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="verification command timed out"
         elif [[ "$LAST_FAILURE_TYPE" == "TEST" ]]; then
           FINAL_STATUS=TEST_FAIL
           [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="verification command failed"
@@ -1137,7 +1151,7 @@ fi
 AFTER_OTHER_STATUS="$(status_without_target "$TARGET_FILE")"
 if [[ "$AFTER_OTHER_STATUS" != "$BASE_OTHER_STATUS" ]]; then
   OUTSIDE_CHANGES="$AFTER_OTHER_STATUS"
-  FINAL_STATUS=FAIL
+  FINAL_STATUS=DEPENDENCY_GUARD_FAIL
   ERROR_MESSAGE="verification changed files outside target_file"
 fi
 emit_report

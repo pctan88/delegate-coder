@@ -219,6 +219,20 @@ assert data.endswith(b"\n") and not data.endswith(b"\n\n")
 PY
 [[ "$(stat -c '%a' "$CASE_DIR/target.txt" 2>/dev/null || stat -f '%Lp' "$CASE_DIR/target.txt")" == 640 ]] || fail "target mode should be preserved"
 ! grep -Fq 'contract-router:' "$STDOUT_PATH" || fail "progress must not pollute stdout"
+python3 - "$CASE_DIR/.claude/delegate-coder.log" <<'PY' || fail "valid contract audit log record missing or incomplete"
+import json, sys
+events = [json.loads(line) for line in open(sys.argv[1])]
+assert len(events) == 2, f"expected 2 events (start/end), got {len(events)}"
+start, end = events[0], events[1]
+assert start.get("event") == "start" and end.get("event") == "end"
+assert start.get("run_id") and len(start.get("run_id")) == 36, "start missing run_id uuid"
+assert start.get("run_id") == end.get("run_id"), "run_id must match across start/end"
+assert start.get("task_id") and len(start.get("task_id")) == 36, "task_id missing uuid"
+assert start.get("task_id") == end.get("task_id"), "task_id must match across start/end"
+assert start.get("attempt") == 1 and end.get("attempt") == 1, "attempt should be 1"
+assert start.get("parent_run_id") is None and end.get("parent_run_id") is None, "parent_run_id should be None"
+assert end.get("status") == "PASS", f"expected status PASS, got {end.get('status')}"
+PY
 pass "valid JSON contract and clean report"
 VALID_DIR="$CASE_DIR"
 
@@ -471,6 +485,14 @@ status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "timed-out verification should fail"
 [[ "$(cat "$CURL_COUNT_FILE_PATH")" == 2 ]] || fail "timed-out verification should receive one retry"
+contains "$STDOUT_PATH" '- Status: TIMEOUT' "timed-out report status"
+python3 - "$CASE_DIR/.claude/delegate-coder.log" <<'PY' || fail "timeout audit log record missing"
+import json, sys
+events = [json.loads(line) for line in open(sys.argv[1])]
+end_events = [e for e in events if e.get("event") == "end"]
+assert end_events, "missing end event"
+assert end_events[-1].get("status") == "TIMEOUT", f"expected TIMEOUT, got {end_events[-1].get('status')}"
+PY
 pass "verification timeout"
 
 # Strictly positive limits are rejected before generation.
@@ -696,6 +718,14 @@ set -e
 printf 'untouched\n' | cmp -s - "$CASE_DIR/outside.txt" || fail "outside tracked file must be restored byte-for-byte"
 [[ "$(stat -c '%a' "$CASE_DIR/outside.txt" 2>/dev/null || stat -f '%Lp' "$CASE_DIR/outside.txt")" == 644 ]] || fail "outside tracked file mode must be restored"
 contains "$STDOUT_PATH" 'verification changed files outside target_file' "outside-target error"
+contains "$STDOUT_PATH" '- Status: DEPENDENCY_GUARD_FAIL' "outside-target status"
+python3 - "$CASE_DIR/.claude/delegate-coder.log" <<'PY' || fail "outside audit log record missing"
+import json, sys
+events = [json.loads(line) for line in open(sys.argv[1])]
+end_events = [e for e in events if e.get("event") == "end"]
+assert end_events, "missing end event"
+assert end_events[-1].get("status") == "DEPENDENCY_GUARD_FAIL", f"expected DEPENDENCY_GUARD_FAIL, got {end_events[-1].get('status')}"
+PY
 pass "outside-target change detection"
 
 # A newly created untracked outside file is removed on failure.
