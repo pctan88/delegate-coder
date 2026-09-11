@@ -241,7 +241,7 @@ cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
 JSON
 run_dispatch exec "do it" >/dev/null 2>&1 || true
 LOG="$CASE_DIR/.claude/delegate-coder.log"
-jq -e 'select(.event=="end") | .status == "WORKER_START_FAIL" and .exit_code == 4' "$LOG" >/dev/null 2>&1 || fail "missing agent should log WORKER_START_FAIL with exit 4"
+jq -e 'select(.event=="end") | .status == "WORKER_START_FAIL" and .exit_code == 4 and (.error | contains("not found")) and (.hint | contains("Install"))' "$LOG" >/dev/null 2>&1 || fail "missing agent should log WORKER_START_FAIL with exit 4, error and hint"
 pass "missing agent logs start and end with WORKER_START_FAIL"
 
 # ── delegate.sh: allow_paths violation logs DEPENDENCY_GUARD_FAIL ─────────
@@ -252,7 +252,7 @@ cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
 JSON
 FAKE_TOUCH="$CASE_DIR/src/other.txt" DELEGATE_AGENT=codex run_dispatch exec "edit" >/dev/null 2>&1 || true
 LOG="$CASE_DIR/.claude/delegate-coder.log"
-jq -e 'select(.event=="end" and .exit_code == 6) | .status == "DEPENDENCY_GUARD_FAIL"' "$LOG" >/dev/null 2>&1 || fail "allow_paths failure should log DEPENDENCY_GUARD_FAIL with exit 6"
+jq -e 'select(.event=="end" and .exit_code == 6) | .status == "DEPENDENCY_GUARD_FAIL" and (.error | contains("allow_paths")) and (.hint | contains("Add"))' "$LOG" >/dev/null 2>&1 || fail "allow_paths failure should log DEPENDENCY_GUARD_FAIL with exit 6, error and hint"
 pass "allow_paths violation logs DEPENDENCY_GUARD_FAIL"
 
 # ── detect-test.sh: per-ecosystem inference ───────────────────────────────

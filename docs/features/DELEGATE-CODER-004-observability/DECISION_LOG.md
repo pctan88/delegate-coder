@@ -31,3 +31,10 @@
   - `commit_sha`: Git commit SHA of accepted change if committed on PASS, else `null`.
   - `changed_file_count`: Modified file count (e.g. 1 on accepted contract, 0 on NOOP or failure rollback).
 - **Rationale**: Enables fleet-wide aggregation across worktrees and repos without parsing unstructured text reports, while maintaining strict backward compatibility.
+
+## 2026-09-12: Failure Categorization & Actionable Diagnostic Hints (Phase 3)
+- **Context**: When workers or contracts fail, logs previously lacked diagnostic hints and granular categorization for operational vs test/syntax failures. Operators could not immediately tell if an Ollama model failed to start/connect, if tests failed, or if allow_paths were violated.
+- **Decision**:
+  - Distinguish worker start/connection failures (`WORKER_START_FAIL`) in `contract-router.sh` when Ollama cannot be reached or returns malformed output, providing guidance hints (`Ensure Ollama is running...`).
+  - Pass diagnostic hints (`hint`) and error descriptions (`error`) into `append_json_event` across all execution paths (contract router reports, missing agent, worker command failure, allow_paths guard violations, test binary missing 127).
+- **Rationale**: Gives operators immediate troubleshooting guidance in structured log records, eliminating guesswork during automated triage.

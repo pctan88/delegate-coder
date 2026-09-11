@@ -32,7 +32,9 @@ done
 
 fail() {
   ERROR_MESSAGE="$*"
-  FINAL_STATUS="FAIL"
+  if [[ -z "$FINAL_STATUS" || "$FINAL_STATUS" == "FAIL" ]]; then
+    FINAL_STATUS="FAIL"
+  fi
   exit 1
 }
 
@@ -785,6 +787,8 @@ generate_file() {
   if is_loopback_host; then curl_args+=(--noproxy '*'); fi
   if ! curl "${curl_args[@]}" > "$RESPONSE_FILE"; then
     ERROR_MESSAGE="Ollama request failed at $OLLAMA_HOST/api/generate"
+    FINAL_STATUS="WORKER_START_FAIL"
+    HINT_MESSAGE="Ensure Ollama is running at $OLLAMA_HOST and model $MODEL is pulled ('ollama pull $MODEL')"
     return 1
   fi
   if ! capture_response; then
@@ -799,6 +803,8 @@ except Exception as exc:
     print(f"malformed Ollama response: {exc}")
 PY
 )"
+    FINAL_STATUS="WORKER_START_FAIL"
+    HINT_MESSAGE="Ollama returned invalid structured output. Check model compatibility or schema budget."
     return 1
   fi
 }

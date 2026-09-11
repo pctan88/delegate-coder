@@ -48,7 +48,8 @@ The log continues to be formatted as newline-delimited JSON (JSONL). Every recor
   "test_command": "pytest tests/test_target.py",
   "commit_sha": null,
   "changed_file_count": 1,
-  "error": "",
+  "error": null,
+  "hint": null,
   "total_duration": 28000000000,
   "load_duration": 15000000,
   "prompt_eval_count": 1250,
@@ -92,3 +93,10 @@ The log continues to be formatted as newline-delimited JSON (JSONL). Every recor
 | `test_command` | String or `null` | `end` | Verification command string executed, or `null` if not applicable / read mode. |
 | `commit_sha` | String or `null` | `end` | Git commit SHA (40 hex characters) of accepted change on `PASS` if committed, or `null` if uncommitted / non-PASS / rolled back. |
 | `changed_file_count` | Integer | `end` | Integer count of modified files in repository (e.g. 1 on accepted contract, 0 on NOOP or failure rollback). |
+
+## Diagnostic Fields (Phase 3)
+
+| Field | Type | Events | Description |
+|---|---|---|---|
+| `error` | String or `null` | `end` | Clear summary of failure reason (e.g. `Ollama request failed`, `Agent 'xyz' not found`, `syntax preflight check failed`), or `null` on `PASS`. |
+| `hint` | String or `null` | `end` | Actionable operational recommendation or diagnostic guidance for the failure (e.g. advice on missing binaries, invalid syntax retry limits, or allow_paths configuration), or `null` if not applicable. |

@@ -390,6 +390,7 @@ if [[ "$MODE" == "contract" ]]; then
   [[ -n "$CONTRACT_RETRIES" ]] || CONTRACT_RETRIES=0
   CONTRACT_RESTORED="$(report_value Restored "$CONTRACT_REPORT")"
   CONTRACT_ERROR="$(report_value Error "$CONTRACT_REPORT")"
+  CONTRACT_HINT="$(report_value Hint "$CONTRACT_REPORT")"
   CONTRACT_BRANCH="$(report_value Branch "$CONTRACT_REPORT")"
   CONTRACT_REPORT_REPO="$(report_value Repo "$CONTRACT_REPORT")"
   CONTRACT_REPORT_GIT_ROOT="$(report_value 'Git root' "$CONTRACT_REPORT")"
@@ -401,7 +402,7 @@ if [[ "$MODE" == "contract" ]]; then
     duration_s "$(( $(date +%s) - CONTRACT_T0 ))" exit_code "$CONTRACT_EXIT" status "$CONTRACT_STATUS" retries "$CONTRACT_RETRIES" restored "${CONTRACT_RESTORED:-false}" \
     repo "${CONTRACT_REPORT_REPO:-$DELEGATE_REPO}" git_root "${CONTRACT_REPORT_GIT_ROOT:-$DELEGATE_GIT_ROOT}" branch "${CONTRACT_BRANCH:-$DELEGATE_BRANCH}" \
     target_files "${CONTRACT_TARGET_FILES:-[]}" test_command "${CONTRACT_TEST_COMMAND:-None}" commit_sha "${CONTRACT_COMMIT_SHA:-None}" changed_file_count "${CONTRACT_CHANGED_COUNT:-0}" \
-    error "$CONTRACT_ERROR" \
+    error "$CONTRACT_ERROR" hint "$CONTRACT_HINT" \
     total_duration "$(report_value 'Ollama total_duration' "$CONTRACT_REPORT")" load_duration "$(report_value 'Ollama load_duration' "$CONTRACT_REPORT")" prompt_eval_count "$(report_value 'Ollama prompt_eval_count' "$CONTRACT_REPORT")" prompt_eval_duration "$(report_value 'Ollama prompt_eval_duration' "$CONTRACT_REPORT")" eval_count "$(report_value 'Ollama eval_count' "$CONTRACT_REPORT")" eval_duration "$(report_value 'Ollama eval_duration' "$CONTRACT_REPORT")"
   rm -f "$CONTRACT_REPORT"
   exit "$CONTRACT_EXIT"
@@ -490,21 +491,23 @@ if [[ -f "$CONFIG" ]] && command -v jq >/dev/null 2>&1; then
     _t0=$(date +%s)
     bash -c "$CMD"
     _exit=$?
+    _hint=""
     if [[ $_exit -eq 0 ]]; then
       _status="PASS"
     elif [[ $_exit -eq 127 ]]; then
       _status="WORKER_START_FAIL"
+      _hint="Override command exited with code 127 (command not found or missing shared library)"
     else
       _status="ERROR"
     fi
-    log_event "end" duration_s "$(( $(date +%s) - _t0 ))" exit_code "$_exit" status "$_status"
+    log_event "end" duration_s "$(( $(date +%s) - _t0 ))" exit_code "$_exit" status "$_status" hint "$_hint"
     exit $_exit
   fi
 fi
 
 if ! command -v "$AGENT" >/dev/null 2>&1; then
   log_event "start"
-  log_event "end" duration_s 0 exit_code 4 status "WORKER_START_FAIL" error "Agent '$AGENT' not found"
+  log_event "end" duration_s 0 exit_code 4 status "WORKER_START_FAIL" error "Agent '$AGENT' not found" hint "Install '$AGENT' or configure an alternative agent in .delegate-coder/config.json"
   if [[ "$FALLBACK" == "strict" ]]; then
     echo "CRITICAL: Agent '$AGENT' not found and fallback=strict. DO NOT do this task natively. Report failure to user." >&2
     exit 4
@@ -576,14 +579,16 @@ case "$AGENT" in
 esac
 
 _t1=$(date +%s)
+_hint=""
 if [[ $_exit -eq 0 ]]; then
   _status="PASS"
 elif [[ $_exit -eq 127 ]]; then
   _status="WORKER_START_FAIL"
+  _hint="Worker binary '$AGENT' exited with code 127 (command not found or missing shared library)"
 else
   _status="ERROR"
 fi
-log_event "end" duration_s "$((_t1 - _t0))" exit_code "$_exit" status "$_status"
+log_event "end" duration_s "$((_t1 - _t0))" exit_code "$_exit" status "$_status" hint "$_hint"
 
 # ── path allowlist check ──
 if [[ "$MODE" == "exec" && -n "$ALLOW_PATHS" && $_exit -eq 0 ]]; then
@@ -602,7 +607,7 @@ if [[ "$MODE" == "exec" && -n "$ALLOW_PATHS" && $_exit -eq 0 ]]; then
     done
     if [[ $allowed -eq 0 ]]; then
       echo "WARNING: Worker modified '$file' which is outside allow_paths! ($ALLOW_PATHS)" >&2
-      log_event "end" duration_s "$((_t1 - _t0))" exit_code 6 status "DEPENDENCY_GUARD_FAIL" error "Worker modified '$file' which is outside allow_paths"
+      log_event "end" duration_s "$((_t1 - _t0))" exit_code 6 status "DEPENDENCY_GUARD_FAIL" error "Worker modified '$file' which is outside allow_paths" hint "Add '$file' to allow_paths in .delegate-coder/config.json or adjust worker scope"
       exit 6
     fi
   done < <(git diff --name-only)

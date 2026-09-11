@@ -238,6 +238,8 @@ assert start.get("branch") is not None and end.get("branch") is not None, "branc
 assert end.get("target_files") == ["target.txt"], f"expected target_files ['target.txt'], got {end.get('target_files')}"
 assert end.get("test_command") == "grep -q '^good$' target.txt", f"unexpected test_command: {end.get('test_command')}"
 assert end.get("changed_file_count") == 1, f"expected changed_file_count 1, got {end.get('changed_file_count')}"
+assert end.get("error") is None, f"expected error None on PASS, got {end.get('error')}"
+assert end.get("hint") is None, f"expected hint None on PASS, got {end.get('hint')}"
 PY
 pass "valid JSON contract and clean report"
 VALID_DIR="$CASE_DIR"
@@ -267,6 +269,8 @@ for malformed_mode in malformed empty additional; do
   [[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "$malformed_mode output must not change target"
   [[ "$(cat "$CURL_COUNT_FILE_PATH")" == 1 ]] || fail "$malformed_mode should stop after parser rejection (count=$(cat "$CURL_COUNT_FILE_PATH"))"
   contains "$STDOUT_PATH" '- Restored: false' "$malformed_mode parser failure should report no write"
+  contains "$STDOUT_PATH" '- Status: WORKER_START_FAIL' "$malformed_mode parser failure should report WORKER_START_FAIL"
+  contains "$STDOUT_PATH" '- Hint: Ollama returned invalid structured output' "$malformed_mode parser failure should include hint"
 done
 pass "strict structured-output validation"
 
