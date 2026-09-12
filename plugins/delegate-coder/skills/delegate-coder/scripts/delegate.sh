@@ -478,16 +478,32 @@ if [[ -z "$AGENT" ]]; then
   exit 3
 fi
 
-# Resolve model, fallback, allow_paths
+# Resolve model, fallback, allow_paths, fallback_agent, fallback_chain
 MODEL=""
 FALLBACK="graceful"
 ALLOW_PATHS=""
+FALLBACK_AGENT=""
+FALLBACK_CHAIN=""
 if [[ -f "$CONFIG" ]]; then
   MODEL="$(json_get model)"
   f="$(json_get fallback)"
   [[ -n "$f" ]] && FALLBACK="$f"
+  FALLBACK_AGENT="$(json_get fallback_agent)"
   if command -v jq >/dev/null 2>&1; then
     ALLOW_PATHS="$(jq -r '.allow_paths // empty | join(" ")' "$CONFIG" 2>/dev/null)"
+    FALLBACK_CHAIN="$(jq -r '.fallback_chain // empty | join(" ")' "$CONFIG" 2>/dev/null)"
+  elif command -v python3 >/dev/null 2>&1; then
+    FALLBACK_CHAIN="$(python3 - "$CONFIG" <<'PY' 2>/dev/null
+import json, pathlib, sys
+try:
+    c = json.loads(pathlib.Path(sys.argv[1]).read_text())
+    chain = c.get("fallback_chain", [])
+    if isinstance(chain, list):
+        print(" ".join(str(x) for x in chain))
+except Exception:
+    pass
+PY
+)"
   fi
 fi
 
@@ -527,14 +543,49 @@ if [[ -f "$CONFIG" ]] && command -v jq >/dev/null 2>&1; then
 fi
 
 if ! command -v "$AGENT" >/dev/null 2>&1; then
-  log_event "start"
-  log_event "end" duration_s 0 exit_code 4 status "WORKER_START_FAIL" error "Agent '$AGENT' not found" hint "Install '$AGENT' or configure an alternative agent in .delegate-coder/config.json"
-  if [[ "$FALLBACK" == "strict" ]]; then
-    echo "CRITICAL: Agent '$AGENT' not found and fallback=strict. DO NOT do this task natively. Report failure to user." >&2
-    exit 4
+  # Check for adaptive fallback candidate if fallback is not strict and a fallback policy is configured
+  _fallback_candidate=""
+  if [[ "$FALLBACK" != "strict" ]]; then
+    # 1. Configured fallback_agent
+    if [[ -n "$FALLBACK_AGENT" ]] && command -v "$FALLBACK_AGENT" >/dev/null 2>&1; then
+      _fallback_candidate="$FALLBACK_AGENT"
+    fi
+    # 2. Configured fallback_chain
+    if [[ -z "$_fallback_candidate" && -n "$FALLBACK_CHAIN" ]]; then
+      for candidate in $FALLBACK_CHAIN; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+          _fallback_candidate="$candidate"
+          break
+        fi
+      done
+    fi
+  fi
+
+  if [[ -n "$_fallback_candidate" ]]; then
+    # Log attempt 1 failure and routing transition
+    _prior_agent="$AGENT"
+    _prior_run_id="$DELEGATE_RUN_ID"
+    log_event "start"
+    log_event "end" duration_s 0 exit_code 4 status "WORKER_START_FAIL" error "Agent '$_prior_agent' not found" hint "Adaptively falling back to candidate '$_fallback_candidate'"
+
+    # Prepare attempt 2 for fallback agent
+    echo ">> Warning: Agent '$_prior_agent' not found. Adaptively falling back to '$_fallback_candidate'..." >&2
+    AGENT="$_fallback_candidate"
+    DELEGATE_PARENT_RUN_ID="$_prior_run_id"
+    DELEGATE_ATTEMPT=$(( DELEGATE_ATTEMPT + 1 ))
+    if command -v python3 >/dev/null 2>&1; then
+      DELEGATE_RUN_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+    fi
   else
-    echo "Agent '$AGENT' not found on PATH." >&2
-    exit 4
+    log_event "start"
+    log_event "end" duration_s 0 exit_code 4 status "WORKER_START_FAIL" error "Agent '$AGENT' not found" hint "Install '$AGENT' or configure an alternative agent in .delegate-coder/config.json"
+    if [[ "$FALLBACK" == "strict" ]]; then
+      echo "CRITICAL: Agent '$AGENT' not found and fallback=strict. DO NOT do this task natively. Report failure to user." >&2
+      exit 4
+    else
+      echo "Agent '$AGENT' not found on PATH." >&2
+      exit 4
+    fi
   fi
 fi
 

@@ -246,6 +246,63 @@ LOG="$CASE_DIR/.claude/delegate-coder.log"
 jq -se 'any(.[]; .event=="end" and .status == "WORKER_START_FAIL" and .exit_code == 4 and (.error | contains("not found")) and (.hint | contains("Install")))' "$LOG" >/dev/null 2>&1 || fail "missing agent should log WORKER_START_FAIL with exit 4, error and hint"
 pass "missing agent logs start and end with WORKER_START_FAIL"
 
+# ── delegate.sh: adaptive fallback to fallback_agent ─────────────────────
+setup_case adaptive_fallback_agent
+mkdir -p "$CASE_DIR/.delegate-coder"
+cat > "$CASE_DIR/.delegate-coder/config.json" <<'JSON'
+{
+  "agent": "delegate_coder_missing_agent_9fd0d3",
+  "fallback": "graceful",
+  "fallback_agent": "codex"
+}
+JSON
+run_dispatch exec "adaptive task" >/dev/null 2>&1 || fail "adaptive fallback should succeed with codex"
+LOG="$CASE_DIR/.claude/delegate-coder.log"
+jq -e 'select(.attempt==1 and .event=="end") | .status == "WORKER_START_FAIL" and .agent == "delegate_coder_missing_agent_9fd0d3" and (.hint | contains("Adaptively falling back to candidate '\''codex'\''"))' "$LOG" >/dev/null 2>&1 || fail "attempt 1 should record WORKER_START_FAIL with fallback hint"
+jq -e 'select(.attempt==2 and .event=="end") | .status == "PASS" and .agent == "codex" and .exit_code == 0' "$LOG" >/dev/null 2>&1 || fail "attempt 2 should record PASS with codex"
+# Check correlation: shared task_id, attempt 2 parent_run_id == attempt 1 run_id
+python3 - "$LOG" <<'PY' || fail "correlation mismatch across adaptive fallback attempts"
+import json, pathlib, sys
+records = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().strip().splitlines()]
+end1 = [r for r in records if r["event"] == "end" and r["attempt"] == 1][0]
+start2 = [r for r in records if r["event"] == "start" and r["attempt"] == 2][0]
+end2 = [r for r in records if r["event"] == "end" and r["attempt"] == 2][0]
+assert end1["task_id"] == start2["task_id"] == end2["task_id"], "task_id should be identical"
+assert start2["parent_run_id"] == end1["run_id"], "attempt 2 parent_run_id should equal attempt 1 run_id"
+assert end2["parent_run_id"] == end1["run_id"], "attempt 2 end parent_run_id should equal attempt 1 run_id"
+PY
+pass "adaptive fallback routes to fallback_agent with correlated audit trail"
+
+# ── delegate.sh: adaptive fallback through fallback_chain ─────────────────
+setup_case adaptive_fallback_chain
+mkdir -p "$CASE_DIR/.delegate-coder"
+cat > "$CASE_DIR/.delegate-coder/config.json" <<'JSON'
+{
+  "agent": "missing_agent_1",
+  "fallback": "graceful",
+  "fallback_chain": ["missing_agent_2", "codex", "missing_agent_3"]
+}
+JSON
+run_dispatch exec "chain task" >/dev/null 2>&1 || fail "adaptive chain fallback should succeed with codex"
+LOG="$CASE_DIR/.claude/delegate-coder.log"
+jq -e 'select(.attempt==2 and .event=="end") | .status == "PASS" and .agent == "codex"' "$LOG" >/dev/null 2>&1 || fail "chain attempt 2 should record PASS with codex"
+pass "adaptive fallback routes through fallback_chain to first available candidate"
+
+# ── delegate.sh: strict fallback ignores fallback_agent ───────────────────
+setup_case strict_ignores_fallback
+mkdir -p "$CASE_DIR/.delegate-coder"
+cat > "$CASE_DIR/.delegate-coder/config.json" <<'JSON'
+{
+  "agent": "delegate_coder_missing_agent_9fd0d3",
+  "fallback": "strict",
+  "fallback_agent": "codex"
+}
+JSON
+run_dispatch exec "strict task" >/dev/null 2>"$CASE_DIR/err"; rc=$?
+[[ $rc -eq 4 ]] || fail "strict with fallback_agent should still exit 4 (got $rc)"
+contains "$CASE_DIR/err" "CRITICAL" "strict fallback must print CRITICAL"
+pass "strict fallback policy ignores fallback_agent and preserves CRITICAL exit 4"
+
 # ── delegate.sh: allow_paths violation logs DEPENDENCY_GUARD_FAIL ─────────
 setup_case allow_paths_audit
 mkdir -p "$CASE_DIR/.claude"

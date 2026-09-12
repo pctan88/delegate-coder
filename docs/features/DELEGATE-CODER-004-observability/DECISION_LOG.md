@@ -48,3 +48,12 @@
   - Provide a structured JSON export (`--json`) for automation.
   - Retain default single-file human-readable output when invoked with no arguments for full backward compatibility.
 - **Rationale**: Unlocks transparent visibility across the full development fleet without breaking existing single-workspace workflows or benchmark scripts.
+
+## 2026-09-12: Adaptive Routing & Fallback Policies (Phase 5)
+- **Context**: Operational failures (such as missing worker binaries on PATH or unauthenticated CLIs) previously halted delegations immediately without recourse even when alternative capable workers were installed on the system.
+- **Decision**:
+  - Support `fallback_agent` and `fallback_chain` in `.delegate-coder/config.json`.
+  - When `fallback: "graceful"` (the default) is in effect, adaptively fall back to the first available healthy candidate on PATH if the primary agent is missing.
+  - Preserve strict enforcement when `fallback: "strict"` is chosen (immediately fails code 4 with CRITICAL notice and no fallback).
+  - Explicitly record both execution attempts in `.claude/delegate-coder.log`: attempt 1 as `WORKER_START_FAIL` with an actionable hint pointing to the fallback candidate, and attempt 2 under the fallback agent linked via `parent_run_id` and sharing the same `task_id`.
+- **Rationale**: Eliminates avoidable operational failures in CI and local workflows while ensuring complete transparency and traceability in audit metrics.

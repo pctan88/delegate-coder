@@ -152,3 +152,27 @@ stats.sh [--fleet|--all] [--json] [logfile1 logfile2 ...]
   ]
 }
 ```
+
+## Adaptive Routing & Fallback Policies (Phase 5)
+
+### Configuration Schema (`.delegate-coder/config.json`)
+```json
+{
+  "agent": "codex",
+  "fallback": "graceful",
+  "fallback_agent": "qwen",
+  "fallback_chain": ["qwen", "mimo", "opencode"]
+}
+```
+
+- `fallback`: Policy on missing or unexecutable worker:
+  - `"strict"`: Hard failure immediately on missing agent (exits code 4 with CRITICAL notice, ignores fallback candidates).
+  - `"graceful"` (default): When `fallback_agent` or `fallback_chain` is defined, adaptively switches to the first available healthy candidate on `PATH` instead of terminating.
+- `fallback_agent`: Alternative worker agent binary to invoke when primary `agent` is missing.
+- `fallback_chain`: Ordered array of candidate worker agent binaries to probe sequentially.
+
+### Adaptive Audit Traceability
+When adaptive routing triggers:
+1. Attempt 1 logs `event: "start"` and `event: "end"` with `status: "WORKER_START_FAIL"`, `exit_code: 4`, and `hint: "Adaptively falling back to candidate '<candidate>'"` recording the primary agent failure.
+2. Attempt 2 logs `event: "start"` and `event: "end"` under the new candidate agent, linked by `parent_run_id = <run_id of attempt 1>`, sharing the same `task_id`, and incrementing `attempt: 2`.
+
