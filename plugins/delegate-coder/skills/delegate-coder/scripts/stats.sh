@@ -8,61 +8,79 @@ set -u
 
 FLEET_MODE=false
 JSON_MODE=false
+SINCE_FILTER=""
 LOG_FILES=()
 
-for arg in "$@"; do
-  case "$arg" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --fleet|--all)
       FLEET_MODE=true
+      shift
       ;;
     --json)
       JSON_MODE=true
+      shift
+      ;;
+    --since)
+      if [[ $# -lt 2 ]]; then
+        echo "stats.sh: --since requires a duration argument (e.g. 24h, 7d)" >&2
+        exit 1
+      fi
+      SINCE_FILTER="$2"
+      shift 2
       ;;
     -h|--help)
-      echo "Usage: stats.sh [--fleet] [--json] [log_files...]"
-      echo "  --fleet, --all  Discover and aggregate logs across git worktrees and sibling workspaces"
-      echo "  --json          Output aggregate statistics in JSON format"
+      echo "Usage: stats.sh [--fleet] [--json] [--since <N>h|<N>d] [log_files...]"
+      echo "  --fleet, --all          Discover and aggregate logs across fleet log or git worktrees"
+      echo "  --json                  Output aggregate statistics in JSON format"
+      echo "  --since <N>h|<N>d       Filter records within the last N hours or days"
       exit 0
       ;;
     *)
-      LOG_FILES+=("$arg")
+      LOG_FILES+=("$1")
+      shift
       ;;
   esac
 done
 
-# If fleet mode requested, discover logs across worktrees and sibling repositories
+# If fleet mode requested, prefer central fleet log if it exists, else discover across worktrees/siblings
 if [[ "$FLEET_MODE" == true ]]; then
-  discovered=()
-  # 1. Current directory / git root
-  git_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-  if [[ -n "$git_root" ]]; then
-    # Discover git worktrees
-    while IFS= read -r wt_line; do
-      wt_path="$(printf '%s' "$wt_line" | awk '{print $1}')"
-      if [[ -f "$wt_path/.claude/delegate-coder.log" ]]; then
-        discovered+=("$wt_path/.claude/delegate-coder.log")
-      fi
-    done < <(git -C "$git_root" worktree list 2>/dev/null || true)
-
-    # Check parent directory siblings for sibling repos or worktrees (depth 3)
-    parent_dir="$(dirname "$git_root")"
-    if [[ -d "$parent_dir" ]]; then
-      while IFS= read -r sibling_log; do
-        [[ -n "$sibling_log" ]] && discovered+=("$sibling_log")
-      done < <(find "$parent_dir" -maxdepth 3 -type f -name "delegate-coder.log" -path "*/.claude/*" 2>/dev/null || true)
-    fi
+  fleet_log="${DELEGATE_FLEET_LOG:-${HOME:-}/.delegate-coder/fleet.jsonl}"
+  if [[ -f "$fleet_log" && -s "$fleet_log" ]]; then
+    LOG_FILES+=("$fleet_log")
   else
-    # Outside git: check current dir and subdirs
-    while IFS= read -r local_log; do
-      [[ -n "$local_log" ]] && discovered+=("$local_log")
-    done < <(find . -maxdepth 3 -type f -name "delegate-coder.log" -path "*/.claude/*" 2>/dev/null || true)
-  fi
+    discovered=()
+    # 1. Current directory / git root
+    git_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    if [[ -n "$git_root" ]]; then
+      # Discover git worktrees
+      while IFS= read -r wt_line; do
+        wt_path="$(printf '%s' "$wt_line" | awk '{print $1}')"
+        if [[ -f "$wt_path/.claude/delegate-coder.log" ]]; then
+          discovered+=("$wt_path/.claude/delegate-coder.log")
+        fi
+      done < <(git -C "$git_root" worktree list 2>/dev/null || true)
 
-  # Deduplicate discovered paths
-  if [[ ${#discovered[@]} -gt 0 ]]; then
-    while IFS= read -r unique_file; do
-      [[ -n "$unique_file" ]] && LOG_FILES+=("$unique_file")
-    done < <(printf '%s\n' "${discovered[@]}" | sort -u)
+      # Check parent directory siblings for sibling repos or worktrees (depth 3)
+      parent_dir="$(dirname "$git_root")"
+      if [[ -d "$parent_dir" ]]; then
+        while IFS= read -r sibling_log; do
+          [[ -n "$sibling_log" ]] && discovered+=("$sibling_log")
+        done < <(find "$parent_dir" -maxdepth 3 -type f -name "delegate-coder.log" -path "*/.claude/*" 2>/dev/null || true)
+      fi
+    else
+      # Outside git: check current dir and subdirs
+      while IFS= read -r local_log; do
+        [[ -n "$local_log" ]] && discovered+=("$local_log")
+      done < <(find . -maxdepth 3 -type f -name "delegate-coder.log" -path "*/.claude/*" 2>/dev/null || true)
+    fi
+
+    # Deduplicate discovered paths
+    if [[ ${#discovered[@]} -gt 0 ]]; then
+      while IFS= read -r unique_file; do
+        [[ -n "$unique_file" ]] && LOG_FILES+=("$unique_file")
+      done < <(printf '%s\n' "${discovered[@]}" | sort -u)
+    fi
   fi
 fi
 
@@ -97,14 +115,43 @@ fi
 
 # Prefer Python engine for robust multi-file stream aggregation, task deduplication, and schema validation
 if command -v python3 >/dev/null 2>&1; then
-  python3 - "$JSON_MODE" "${EXISTING_LOGS[@]}" <<'PY'
+  python3 - "$JSON_MODE" "$SINCE_FILTER" "${EXISTING_LOGS[@]}" <<'PY'
 import json
 import os
 import sys
 from collections import defaultdict
+from datetime import datetime, timezone, timedelta
 
 json_mode = sys.argv[1].lower() == "true"
-log_files = sys.argv[2:]
+since_str = sys.argv[2].strip()
+log_files = sys.argv[3:]
+
+cutoff_dt = None
+if since_str:
+    val_str = since_str[:-1]
+    unit = since_str[-1].lower()
+    try:
+        val = float(val_str)
+        if unit == "h":
+            cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=val)
+        elif unit == "d":
+            cutoff_dt = datetime.now(timezone.utc) - timedelta(days=val)
+        elif unit == "m":
+            cutoff_dt = datetime.now(timezone.utc) - timedelta(minutes=val)
+        else:
+            sys.stderr.write(f"stats.sh: unsupported --since unit in '{since_str}' (use 'h' or 'd')\n")
+            sys.exit(1)
+    except ValueError:
+        sys.stderr.write(f"stats.sh: invalid --since duration '{since_str}'\n")
+        sys.exit(1)
+
+def parse_iso_ts(ts_str):
+    if not ts_str or not isinstance(ts_str, str):
+        return None
+    try:
+        return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 start_records = []
 end_records = []
@@ -124,6 +171,10 @@ for file_path in log_files:
                     record = json.loads(line_str)
                 except Exception:
                     continue
+                if cutoff_dt is not None:
+                    rec_ts = parse_iso_ts(record.get("ts"))
+                    if rec_ts is not None and rec_ts < cutoff_dt:
+                        continue
                 event = record.get("event")
                 if event == "start":
                     start_records.append(record)
@@ -212,6 +263,7 @@ pass_rate = (total_success / total_end * 100.0) if total_end > 0 else 0.0
 if json_mode:
     output = {
         "files": log_files,
+        "since": since_str if since_str else None,
         "total_delegations": total_start,
         "completions_logged": total_end,
         "logical_tasks": logical_tasks_count,
@@ -245,10 +297,11 @@ if json_mode:
     sys.exit(0)
 
 # Human-readable output
+title_suffix = f" [since {since_str}]" if since_str else ""
 if len(log_files) == 1:
-    print(f"delegate-coder activity log ({log_files[0]})")
+    print(f"delegate-coder activity log ({log_files[0]}){title_suffix}")
 else:
-    print(f"delegate-coder fleet activity log ({len(log_files)} files)")
+    print(f"delegate-coder fleet activity log ({len(log_files)} files){title_suffix}")
 print("=======================================")
 print("")
 print(f"Total delegations:  {total_start}")

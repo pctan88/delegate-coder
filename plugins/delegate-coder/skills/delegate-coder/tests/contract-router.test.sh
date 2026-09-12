@@ -1230,7 +1230,7 @@ DELEGATE_TEST_TIMEOUT=1 run_dispatch "$(cat "$CASE_DIR/contract.json")"
 status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "timed-out verification should return nonzero"
-contains "$STDOUT_PATH" '- Status: TEST_FAIL' "timeout status remains TEST_FAIL"
+contains "$STDOUT_PATH" '- Status: TIMEOUT' "timeout status is TIMEOUT"
 contains "$STDOUT_PATH" '- Restored: true' "timeout should restore the existing target"
 contains "$STDOUT_PATH" 'timed out after 1s' "timeout hint names the configured timeout"
 contains "$STDOUT_PATH" 'looks like a stall rather than a normal test failure' "timeout hint is diagnosable"

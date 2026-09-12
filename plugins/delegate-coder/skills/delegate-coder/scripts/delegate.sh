@@ -74,6 +74,7 @@ append_json_event() {
       "$DELEGATE_RUN_ID" "$DELEGATE_TASK_ID" "$DELEGATE_ATTEMPT" "$DELEGATE_PARENT_RUN_ID" \
       "${DELEGATE_REPO:-}" "${DELEGATE_GIT_ROOT:-}" "${DELEGATE_BRANCH:-}" "$@" <<'PY'
 import json
+import os
 import pathlib
 import sys
 
@@ -145,12 +146,32 @@ for index in range(0, len(extra), 2):
         record[key] = value
 with pathlib.Path(sys.argv[1]).open("a") as output:
     output.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+fleet_log = os.environ.get("DELEGATE_FLEET_LOG")
+if not fleet_log:
+    home = os.environ.get("HOME")
+    if home:
+        fleet_log = str(pathlib.Path(home) / ".delegate-coder" / "fleet.jsonl")
+if fleet_log:
+    try:
+        p = pathlib.Path(fleet_log)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f_out:
+            f_out.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
 PY
   elif command -v jq >/dev/null 2>&1; then
-    jq -n --arg ts "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" --arg agent "$agent" --arg model "$model" --arg mode "$mode" --arg event "$event" \
+    local line
+    line="$(jq -c -n --arg ts "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" --arg agent "$agent" --arg model "$model" --arg mode "$mode" --arg event "$event" \
       --arg run_id "$DELEGATE_RUN_ID" --arg task_id "$DELEGATE_TASK_ID" --argjson attempt "${DELEGATE_ATTEMPT:-1}" --arg parent_run_id "${DELEGATE_PARENT_RUN_ID:-}" \
       --arg repo "${DELEGATE_REPO:-}" --arg git_root "${DELEGATE_GIT_ROOT:-}" --arg branch "${DELEGATE_BRANCH:-}" \
-      '{run_id:(if $run_id=="" then null else $run_id end),task_id:(if $task_id=="" then null else $task_id end),attempt:$attempt,parent_run_id:(if $parent_run_id=="" then null else $parent_run_id end),ts:$ts,agent:$agent,model:$model,mode:$mode,event:$event,repo:(if $repo=="" then null else $repo end),git_root:(if $git_root=="" then null else $git_root end),branch:(if $branch=="" then null else $branch end),target_files:[],test_command:null,commit_sha:null,changed_file_count:0}' >> "$logfile"
+      '{run_id:(if $run_id=="" then null else $run_id end),task_id:(if $task_id=="" then null else $task_id end),attempt:$attempt,parent_run_id:(if $parent_run_id=="" then null else $parent_run_id end),ts:$ts,agent:$agent,model:$model,mode:$mode,event:$event,repo:(if $repo=="" then null else $repo end),git_root:(if $git_root=="" then null else $git_root end),branch:(if $branch=="" then null else $branch end),target_files:[],test_command:null,commit_sha:null,changed_file_count:0}')"
+    printf '%s\n' "$line" >> "$logfile"
+    local fleet_log="${DELEGATE_FLEET_LOG:-${HOME:-}/.delegate-coder/fleet.jsonl}"
+    if [[ -n "$fleet_log" ]]; then
+      mkdir -p "$(dirname "$fleet_log")" 2>/dev/null || true
+      printf '%s\n' "$line" >> "$fleet_log" 2>/dev/null || true
+    fi
   fi
 }
 
@@ -580,6 +601,7 @@ esac
 
 _t1=$(date +%s)
 _hint=""
+_error=""
 if [[ $_exit -eq 0 ]]; then
   _status="PASS"
 elif [[ $_exit -eq 127 ]]; then
@@ -588,14 +610,13 @@ elif [[ $_exit -eq 127 ]]; then
 else
   _status="ERROR"
 fi
-log_event "end" duration_s "$((_t1 - _t0))" exit_code "$_exit" status "$_status" hint "$_hint"
 
 # ── path allowlist check ──
 if [[ "$MODE" == "exec" && -n "$ALLOW_PATHS" && $_exit -eq 0 ]]; then
   echo ">> Checking allow_paths..." >&2
   # Convert to array for robust prefix matching
   IFS=' ' read -r -a allowed_array <<< "$ALLOW_PATHS"
-  
+
   while IFS= read -r file; do
     [[ -z "$file" ]] && continue
     allowed=0
@@ -607,10 +628,19 @@ if [[ "$MODE" == "exec" && -n "$ALLOW_PATHS" && $_exit -eq 0 ]]; then
     done
     if [[ $allowed -eq 0 ]]; then
       echo "WARNING: Worker modified '$file' which is outside allow_paths! ($ALLOW_PATHS)" >&2
-      log_event "end" duration_s "$((_t1 - _t0))" exit_code 6 status "DEPENDENCY_GUARD_FAIL" error "Worker modified '$file' which is outside allow_paths" hint "Add '$file' to allow_paths in .delegate-coder/config.json or adjust worker scope"
-      exit 6
+      _exit=6
+      _status="DEPENDENCY_GUARD_FAIL"
+      _error="Worker modified '$file' which is outside allow_paths"
+      _hint="Add '$file' to allow_paths in .delegate-coder/config.json or adjust worker scope"
+      break
     fi
   done < <(git diff --name-only)
 fi
+
+log_args=(duration_s "$((_t1 - _t0))" exit_code "$_exit" status "$_status" hint "$_hint")
+if [[ -n "$_error" ]]; then
+  log_args+=(error "$_error")
+fi
+log_event "end" "${log_args[@]}"
 
 exit $_exit

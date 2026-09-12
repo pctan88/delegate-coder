@@ -998,7 +998,6 @@ run_tests() {
         HINT_MESSAGE="verification command binary not found (exit code 127; check PATH or use absolute path in test_command)"
       fi
     fi
-    fi
   fi
   return "$TEST_EXIT"
 }

@@ -8,6 +8,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
 DISPATCH="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/delegate.sh"
 DETECT_TEST="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/detect-test.sh"
 STATS="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/stats.sh"
+REPORT="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/report.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/delegate-coder-core-test.XXXXXX")"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 mkdir -p "$TEST_ROOT/home"
@@ -218,11 +219,11 @@ LOG="$CASE_DIR/.claude/delegate-coder.log"
 [[ -f "$LOG" ]] || fail "audit log should be created"
 contains "$LOG" '"event":"start"' "audit log should record start"
 contains "$LOG" '"agent":"codex"' "audit log should record agent"
-jq -e 'select(.event=="end") | .exit_code == 0' "$LOG" >/dev/null 2>&1 || fail "end event should carry exit_code"
-jq -e 'select(.event=="start") | .run_id != null and .task_id != null and .attempt == 1 and .parent_run_id == null' "$LOG" >/dev/null 2>&1 || fail "start event should carry correlation fields"
-jq -e 'select(.event=="end") | .run_id != null and .task_id != null and .attempt == 1 and .status == "PASS"' "$LOG" >/dev/null 2>&1 || fail "end event should carry correlation fields and status PASS"
-jq -e 'select(.event=="start") | .repo == "audit" and .git_root != null and .branch != null and .target_files == [] and .changed_file_count == 0' "$LOG" >/dev/null 2>&1 || fail "start event should carry context metadata"
-jq -e 'select(.event=="end") | .repo == "audit" and .git_root != null and .branch != null and .target_files == [] and .changed_file_count == 0 and .test_command == null and .commit_sha == null' "$LOG" >/dev/null 2>&1 || fail "end event should carry context metadata"
+jq -se 'any(.[]; .event=="end" and .exit_code == 0)' "$LOG" >/dev/null 2>&1 || fail "end event should carry exit_code"
+jq -se 'any(.[]; .event=="start" and .run_id != null and .task_id != null and .attempt == 1 and .parent_run_id == null)' "$LOG" >/dev/null 2>&1 || fail "start event should carry correlation fields"
+jq -se 'any(.[]; .event=="end" and .run_id != null and .task_id != null and .attempt == 1 and .status == "PASS")' "$LOG" >/dev/null 2>&1 || fail "end event should carry correlation fields and status PASS"
+jq -se 'any(.[]; .event=="start" and .repo == "audit" and .git_root != null and .branch != null and .target_files == [] and .changed_file_count == 0)' "$LOG" >/dev/null 2>&1 || fail "start event should carry context metadata"
+jq -se 'any(.[]; .event=="end" and .repo == "audit" and .git_root != null and .branch != null and .target_files == [] and .changed_file_count == 0 and .test_command == null and .commit_sha == null)' "$LOG" >/dev/null 2>&1 || fail "end event should carry context metadata"
 pass "audit log records start/end with agent, exit_code, correlation, and context metadata"
 
 # ── delegate.sh: explicit DELEGATE_TASK_ID propagation ───────────────────
@@ -230,8 +231,8 @@ setup_case audit_task_id
 CUSTOM_TASK_ID="12345678-1234-5678-1234-567812345678"
 DELEGATE_AGENT=codex DELEGATE_TASK_ID="$CUSTOM_TASK_ID" run_dispatch read "understand" >/dev/null 2>&1 || fail "audit with task_id run failed"
 LOG="$CASE_DIR/.claude/delegate-coder.log"
-jq -e --arg tid "$CUSTOM_TASK_ID" 'select(.event=="start") | .task_id == $tid' "$LOG" >/dev/null 2>&1 || fail "start event should preserve DELEGATE_TASK_ID"
-jq -e --arg tid "$CUSTOM_TASK_ID" 'select(.event=="end") | .task_id == $tid' "$LOG" >/dev/null 2>&1 || fail "end event should preserve DELEGATE_TASK_ID"
+jq -se --arg tid "$CUSTOM_TASK_ID" 'any(.[]; .event=="start" and .task_id == $tid)' "$LOG" >/dev/null 2>&1 || fail "start event should preserve DELEGATE_TASK_ID"
+jq -se --arg tid "$CUSTOM_TASK_ID" 'any(.[]; .event=="end" and .task_id == $tid)' "$LOG" >/dev/null 2>&1 || fail "end event should preserve DELEGATE_TASK_ID"
 pass "audit log preserves explicit DELEGATE_TASK_ID"
 
 # ── delegate.sh: missing agent logs WORKER_START_FAIL ─────────────────────
@@ -242,7 +243,7 @@ cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
 JSON
 run_dispatch exec "do it" >/dev/null 2>&1 || true
 LOG="$CASE_DIR/.claude/delegate-coder.log"
-jq -e 'select(.event=="end") | .status == "WORKER_START_FAIL" and .exit_code == 4 and (.error | contains("not found")) and (.hint | contains("Install"))' "$LOG" >/dev/null 2>&1 || fail "missing agent should log WORKER_START_FAIL with exit 4, error and hint"
+jq -se 'any(.[]; .event=="end" and .status == "WORKER_START_FAIL" and .exit_code == 4 and (.error | contains("not found")) and (.hint | contains("Install")))' "$LOG" >/dev/null 2>&1 || fail "missing agent should log WORKER_START_FAIL with exit 4, error and hint"
 pass "missing agent logs start and end with WORKER_START_FAIL"
 
 # ── delegate.sh: allow_paths violation logs DEPENDENCY_GUARD_FAIL ─────────
@@ -253,7 +254,8 @@ cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
 JSON
 FAKE_TOUCH="$CASE_DIR/src/other.txt" DELEGATE_AGENT=codex run_dispatch exec "edit" >/dev/null 2>&1 || true
 LOG="$CASE_DIR/.claude/delegate-coder.log"
-jq -e 'select(.event=="end" and .exit_code == 6) | .status == "DEPENDENCY_GUARD_FAIL" and (.error | contains("allow_paths")) and (.hint | contains("Add"))' "$LOG" >/dev/null 2>&1 || fail "allow_paths failure should log DEPENDENCY_GUARD_FAIL with exit 6, error and hint"
+jq -se 'any(.[]; .event=="end" and .exit_code == 6 and .status == "DEPENDENCY_GUARD_FAIL" and (.error | contains("allow_paths")) and (.hint | contains("Add")))' "$LOG" >/dev/null 2>&1 || fail "allow_paths failure should log DEPENDENCY_GUARD_FAIL with exit 6, error and hint"
+[[ "$(jq -s '[.[] | select(.event=="end")] | length' "$LOG")" -eq 1 ]] || fail "expected exactly one end event per run"
 pass "allow_paths violation logs DEPENDENCY_GUARD_FAIL"
 
 # ── detect-test.sh: per-ecosystem inference ───────────────────────────────
@@ -550,5 +552,30 @@ pass "stats.sh multi-file fleet aggregation"
 out_empty="$(bash "$STATS" "$CASE_DIR/nonexistent.log")"
 contains_str "$out_empty" "No audit log found" "stats.sh missing log output"
 pass "stats.sh missing log handled gracefully"
+
+# Test 5: stats.sh --since filtering
+out_since_recent="$(bash "$STATS" --json --since 1h "$LOG1")"
+python3 - "$out_since_recent" <<'PY' || fail "stats.sh --since 1h should filter out old entries"
+import json, sys
+data = json.loads(sys.argv[1])
+assert data["total_delegations"] == 0
+assert data["completions_logged"] == 0
+PY
+pass "stats.sh --since filters records outside cutoff"
+
+# Test 6: report.sh execution and --json structure
+out_report="$(bash "$REPORT" --json "$LOG1")"
+python3 - "$out_report" <<'PY' || fail "report.sh --json structure mismatch"
+import json, sys
+data = json.loads(sys.argv[1])
+assert data["total_tasks"] == 2
+assert data["total_runs"] == 3
+assert data["completed_runs"] == 3
+assert "codex" in data["workers"]
+assert "local-ollama" in data["workers"]
+assert data["workers"]["local-ollama"]["pass_rate_pct"] == 50.0
+assert data["workers"]["local-ollama"]["status_breakdown"].get("PREFLIGHT_FAIL") == 1
+PY
+pass "report.sh aggregates tasks and failure breakdown"
 
 echo "# all $PASS checks passed"
