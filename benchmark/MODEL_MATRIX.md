@@ -111,3 +111,132 @@ Sequential is required: two 17 GB models will not co-reside in 36 GB.
 Task tiers live in `benchmark/model_matrix_tasks.sh`; fixtures and checkers in
 `benchmark/fixtures/`. Each checker is validated in both directions — it fails
 on the unmodified fixture and passes against a reference implementation.
+
+---
+
+# Follow-up: edit format (whole-file vs targeted patches)
+
+Date 2026-08-22 · `qwen3-coder:30b` · 3 reps · raw data `matrix-results/patch.jsonl`
+
+Whole-file contract mode pays a ~99% re-transcription tax (bigmod_large emitted
+3954 tokens to express ~23 tokens of change). This tests whether the worker can
+instead emit exact-match edits — the open question being whether a local model
+can reproduce anchor text byte-for-byte.
+
+**It can, in the right format.**
+
+| Format | Result |
+|---|---|
+| Aider-style `<<<<<<< SEARCH` fences | **15/15 PASS** |
+| Schema-constrained JSON `{"edits":[…]}` | 10/15 PASS |
+
+The JSON variant loses because the anchor must survive JSON escaping. Its two
+failure modes were an anchor that never matched (T3: 5 of 7 edits applied, so
+`mark_done` was never added) and, on bigmod-med, a *wrong implementation* —
+`compute_summary` returned 4 instead of the median 3.5, the classic
+`sorted(v)[len(v)//2]` bug on an even-length list. The fenced format got both right.
+
+## The win scales with file size
+
+| Task | Source | Whole-file | Patch (blocks) | Speedup | Tokens cut |
+|---|---|---|---|---|---|
+| T1 simple edit | 1413 B | 8.3s / 570 tok | 5.8s / 505 tok | 1.4x | 1.1x |
+| T2 algorithmic | 732 B | 6.6s / 439 tok | 3.9s / 321 tok | 1.7x | 1.4x |
+| T3 refactor | 1413 B | 10.8s / 570 tok | 11.3s / 863 tok | **1.0x** | **0.7x** |
+| bigmod-med | 3928 B | 20.2s / 1528 tok | 2.4s / 124 tok | 8.4x | 12.3x |
+| bigmod-large | 10257 B | 68.0s / 3954 tok | **1.8s / 124 tok** | **37.6x** | 31.9x |
+
+**Patch output is roughly constant** — 124 tokens for both a 3.9 KB and a 10.3 KB
+file — while whole-file output grows linearly with the file. So the crossover sits
+around 2 KB, and beyond it the advantage compounds.
+
+**T3 is the honest exception:** a diffuse multi-part refactor touches so many
+places that the edits approach the size of the file, and patch mode is *slower*
+(11.3s vs 10.8s) and more verbose. Patch mode wins for localised change, not for
+rewrites.
+
+## It also raises the size ceiling
+
+Because the output no longer scales with the file, the binding constraint becomes
+the prompt:
+
+| | whole-file | patch |
+|---|---|---|
+| `num_ctx` 32768 | ~23 KB | ~95 KB |
+| `num_ctx` 65536 | ~46 KB | ~191 KB |
+
+## Recommendation
+
+Adopt the fenced SEARCH/REPLACE format for targets above ~2 KB; keep whole-file
+for small files and for diffuse rewrites. Contract mode's existing test gate and
+single retry are what make this safe — a bad anchor fails the test and reverts,
+rather than silently corrupting the file.
+
+Not yet integrated into `contract-router.sh`; `patch_probe.py` is a probe only.
+
+## Caveats
+
+- One model, 3 reps, `temperature` 0. Low variance, limited generality.
+- Anchor failures were common even when the task passed: T1's JSON variant lost
+  1 of 3 edits every rep and still passed, because the applied edits sufficed.
+  Partial application is a yellow flag that a pass/fail metric hides.
+- Matching is plain substring with a uniqueness requirement — the generous
+  reading, chosen to measure the model's ceiling rather than penalise valid
+  mid-line anchors.
+
+---
+
+# Validation at 16.4 KB, and a real bug the measurements exposed
+
+Date 2026-08-22 · `qwen3-coder:30b`
+
+## The output-budget estimator was wrong, and it broke contract mode above ~11 KB
+
+The router estimated whole-file output at `bytes/3`. Measured output is
+consistently **~2.58 bytes per token** (1.4 KB, 3.9 KB, 10.3 KB, 16.4 KB targets)
+because JSON string escaping inflates it. That under-budgeted by ~14%, so any
+target above ~11 KB hit `done_reason=length` and failed. The 4096 minimum-budget
+floor hid it below ~10 KB — which is why every existing fixture passed and the
+bug went unnoticed.
+
+Proved empirically on a 16.4 KB / 150-function target:
+
+| | value |
+|---|---|
+| old budget (`bytes/3`) | 5850 |
+| **actual output** | **6546 tokens** |
+| new budget (`bytes/2.4`) | 7248 |
+| result | PASS, 0 retries, 150/150 helpers intact |
+
+The old budget would have cut the file off mid-stream. Predicted need (6505) came
+within 0.6% of actual, confirming the ratio.
+
+Both the router and the benchmark harness now estimate at `bytes/2.4`. Raising a
+`num_predict` cap cannot change a run that already fit under it — at
+`temperature` 0 the same prompt yields the same tokens — so previously passing
+measurements are unaffected; only truncating ones change.
+
+Side effect: this fixes root cause 3 **by default**. `qwen3.8:27b` on T2 direct
+went 0/5 → **5/5** with no `OUTPUT_HEADROOM` set, because the corrected estimate
+alone is now large enough.
+
+## Patch mode at 16.4 KB
+
+Same file, same change, same model:
+
+| Mode | Wall | Output tokens |
+|---|---|---|
+| whole-file (production router) | **111s** | 6546 |
+| patch, fenced blocks | **2.0s** | 124 |
+
+**55x faster, 53x fewer output tokens**, 3/3 PASS.
+
+Output stayed at exactly 124 tokens — the same as the 3.9 KB and 10.3 KB targets.
+Constant output now confirmed across four file sizes, while whole-file grows
+linearly:
+
+| Source | whole-file tokens | patch tokens |
+|---|---|---|
+| 3.9 KB | 1528 | 124 |
+| 10.3 KB | 3954 | 124 |
+| 16.4 KB | 6546 | 124 |

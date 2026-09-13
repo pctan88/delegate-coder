@@ -4,9 +4,9 @@
 
 task_T1_simple() {
   LABEL="T1-simple-edit"
-  TARGET_FILE="scratch/demo_app/todo_cli.py"
+  TARGET_FILE="benchmark/fixtures/demo_app/todo_cli.py"
   INSTRUCTIONS='Add a function update_task(index, new_text) that updates the task at 1-based position `index` with `new_text` and calls save_tasks(). Add a --update INDEX NEW_TEXT CLI option in main() that calls update_task and prints "Updated task {index}: {new_text}" on success, or "Invalid task index." if index is out of range (do not raise an exception). Keep all existing functionality (add/list/delete) unchanged.'
-  TEST_COMMAND='cd scratch/demo_app && python3 -c "
+  TEST_COMMAND='cd benchmark/fixtures/demo_app && python3 -c "
 import sys; sys.path.insert(0, \".\")
 import todo_cli
 todo_cli.save_tasks([\"buy milk\", \"walk dog\"])
@@ -26,7 +26,7 @@ task_T2_algorithmic() {
 
 task_T3_refactor() {
   LABEL="T3-refactor"
-  TARGET_FILE="scratch/demo_app/todo_cli.py"
+  TARGET_FILE="benchmark/fixtures/demo_app/todo_cli.py"
   INSTRUCTIONS='Refactor task storage from a list of plain strings to a list of objects shaped {"text": <str>, "done": <bool>}. Requirements: (1) load_tasks() must transparently upgrade a legacy todo_db.json that still holds a list of plain strings, treating each as done=False; (2) list_tasks() must print "{i}. [x] {text}" for done tasks and "{i}. [ ] {text}" for pending ones, and still print "No tasks found." when empty; (3) add a function mark_done(index) that marks the 1-based task done, saves, and prints "Marked done: {text}", or prints "Invalid task index." when out of range without raising; (4) add a --done INDEX CLI option wired to mark_done; (5) add_task must still print exactly "Added task: {task}" and delete_task must still print exactly "Deleted task: {text}" using the task text, never a dict repr, and still print "Invalid task index." when out of range.'
   TEST_COMMAND='python3 benchmark/fixtures/check_todo_refactor.py'
 }

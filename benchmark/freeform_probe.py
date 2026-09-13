@@ -57,7 +57,7 @@ def load_tasks(repo):
         label, target, instructions, test_command = dump.split("\x00")
         TASKS[label] = {"target": target, "instructions": instructions, "test": test_command}
     # Large-file fidelity tasks, contract-style only.
-    for size in ("med", "large"):
+    for size in ("med", "large", "xl"):
         TASKS[f"S-bigmod-{size}"] = {
             "target": f"benchmark/fixtures/bigmod_{size}.py",
             "instructions": (

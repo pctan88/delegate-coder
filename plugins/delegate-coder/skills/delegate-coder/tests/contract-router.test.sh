@@ -86,6 +86,10 @@ if [[ "$mode" == syntax_error && "$count" -eq 1 ]]; then content="invalid syntax
 if [[ "$mode" == syntax_error && "$count" -eq 2 ]]; then content="print('good')"; fi
 if [[ "$mode" == syntax_error_twice ]]; then content="invalid syntax python code (def broken:"; fi
 if [[ "$mode" == bad ]]; then content=bad; fi
+if [[ "$mode" == pkg_invalid_version ]]; then content='{"dependencies": {"left-pad": "not-a-version"}}'; fi
+if [[ "$mode" == pkg_downgrade ]]; then content='{"dependencies": {"keycloak-angular": "15.0.0"}}'; fi
+if [[ "$mode" == pkg_upgrade ]]; then content='{"dependencies": {"keycloak-angular": "22.1.0"}}'; fi
+if [[ "$mode" == pkg_legitimate_forms ]]; then content='{"dependencies": {"p1": "^1", "p2": "1.2", "p3": "1.x", "p4": "1.2.x", "p5": "~2", "p6": "workspace:*", "p7": "^1.2.3"}}'; fi
 if [[ "$mode" == batch-fail && "$count" -le 2 ]]; then content=bad; fi
 if [[ "$mode" == batch-later && "$count" -ge 2 ]]; then content=bad; fi
 if [[ "$mode" == noop ]]; then content=original; fi
@@ -214,8 +218,30 @@ import pathlib, sys
 data = pathlib.Path(sys.argv[1]).read_bytes()
 assert data.endswith(b"\n") and not data.endswith(b"\n\n")
 PY
-[[ "$(stat -f '%Lp' "$CASE_DIR/target.txt" 2>/dev/null || stat -c '%a' "$CASE_DIR/target.txt")" == 640 ]] || fail "target mode should be preserved"
+[[ "$(stat -c '%a' "$CASE_DIR/target.txt" 2>/dev/null || stat -f '%Lp' "$CASE_DIR/target.txt")" == 640 ]] || fail "target mode should be preserved"
 ! grep -Fq 'contract-router:' "$STDOUT_PATH" || fail "progress must not pollute stdout"
+python3 - "$CASE_DIR/.claude/delegate-coder.log" <<'PY' || fail "valid contract audit log record missing or incomplete"
+import json, sys
+events = [json.loads(line) for line in open(sys.argv[1])]
+assert len(events) == 2, f"expected 2 events (start/end), got {len(events)}"
+start, end = events[0], events[1]
+assert start.get("event") == "start" and end.get("event") == "end"
+assert start.get("run_id") and len(start.get("run_id")) == 36, "start missing run_id uuid"
+assert start.get("run_id") == end.get("run_id"), "run_id must match across start/end"
+assert start.get("task_id") and len(start.get("task_id")) == 36, "task_id missing uuid"
+assert start.get("task_id") == end.get("task_id"), "task_id must match across start/end"
+assert start.get("attempt") == 1 and end.get("attempt") == 1, "attempt should be 1"
+assert start.get("parent_run_id") is None and end.get("parent_run_id") is None, "parent_run_id should be None"
+assert end.get("status") == "PASS", f"expected status PASS, got {end.get('status')}"
+assert start.get("repo") == "valid" and end.get("repo") == "valid", "repo must match case directory basename"
+assert start.get("git_root") is not None and end.get("git_root") is not None, "git_root must be set"
+assert start.get("branch") is not None and end.get("branch") is not None, "branch must be set"
+assert end.get("target_files") == ["target.txt"], f"expected target_files ['target.txt'], got {end.get('target_files')}"
+assert end.get("test_command") == "grep -q '^good$' target.txt", f"unexpected test_command: {end.get('test_command')}"
+assert end.get("changed_file_count") == 1, f"expected changed_file_count 1, got {end.get('changed_file_count')}"
+assert end.get("error") is None, f"expected error None on PASS, got {end.get('error')}"
+assert end.get("hint") is None, f"expected hint None on PASS, got {end.get('hint')}"
+PY
 pass "valid JSON contract and clean report"
 VALID_DIR="$CASE_DIR"
 
@@ -244,6 +270,8 @@ for malformed_mode in malformed empty additional; do
   [[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "$malformed_mode output must not change target"
   [[ "$(cat "$CURL_COUNT_FILE_PATH")" == 1 ]] || fail "$malformed_mode should stop after parser rejection (count=$(cat "$CURL_COUNT_FILE_PATH"))"
   contains "$STDOUT_PATH" '- Restored: false' "$malformed_mode parser failure should report no write"
+  contains "$STDOUT_PATH" '- Status: WORKER_START_FAIL' "$malformed_mode parser failure should report WORKER_START_FAIL"
+  contains "$STDOUT_PATH" '- Hint: Ollama returned invalid structured output' "$malformed_mode parser failure should include hint"
 done
 pass "strict structured-output validation"
 
@@ -468,6 +496,14 @@ status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "timed-out verification should fail"
 [[ "$(cat "$CURL_COUNT_FILE_PATH")" == 2 ]] || fail "timed-out verification should receive one retry"
+contains "$STDOUT_PATH" '- Status: TIMEOUT' "timed-out report status"
+python3 - "$CASE_DIR/.claude/delegate-coder.log" <<'PY' || fail "timeout audit log record missing"
+import json, sys
+events = [json.loads(line) for line in open(sys.argv[1])]
+end_events = [e for e in events if e.get("event") == "end"]
+assert end_events, "missing end event"
+assert end_events[-1].get("status") == "TIMEOUT", f"expected TIMEOUT, got {end_events[-1].get('status')}"
+PY
 pass "verification timeout"
 
 # Strictly positive limits are rejected before generation.
@@ -691,8 +727,16 @@ set -e
 [[ "$status" -ne 0 ]] || fail "outside-target change must fail"
 [[ "$(cat "$CASE_DIR/target.txt")" == original ]] || fail "outside-target failure must restore target"
 printf 'untouched\n' | cmp -s - "$CASE_DIR/outside.txt" || fail "outside tracked file must be restored byte-for-byte"
-[[ "$(stat -f '%Lp' "$CASE_DIR/outside.txt" 2>/dev/null || stat -c '%a' "$CASE_DIR/outside.txt")" == 644 ]] || fail "outside tracked file mode must be restored"
+[[ "$(stat -c '%a' "$CASE_DIR/outside.txt" 2>/dev/null || stat -f '%Lp' "$CASE_DIR/outside.txt")" == 644 ]] || fail "outside tracked file mode must be restored"
 contains "$STDOUT_PATH" 'verification changed files outside target_file' "outside-target error"
+contains "$STDOUT_PATH" '- Status: DEPENDENCY_GUARD_FAIL' "outside-target status"
+python3 - "$CASE_DIR/.claude/delegate-coder.log" <<'PY' || fail "outside audit log record missing"
+import json, sys
+events = [json.loads(line) for line in open(sys.argv[1])]
+end_events = [e for e in events if e.get("event") == "end"]
+assert end_events, "missing end event"
+assert end_events[-1].get("status") == "DEPENDENCY_GUARD_FAIL", f"expected DEPENDENCY_GUARD_FAIL, got {end_events[-1].get('status')}"
+PY
 pass "outside-target change detection"
 
 # A newly created untracked outside file is removed on failure.
@@ -840,6 +884,31 @@ make_contract new.txt "true" "$CASE_DIR/contract.json"
 run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "new.txt contract should run"
 contains "$ARTIFACT_DIR/request.1" '"num_predict": 4096' "expected minimum output budget of 4096"
 pass "minimum output token budget enforced"
+
+# The estimator must use the measured 10/24 bytes-per-token ratio for files
+# large enough to exceed the 4096-token floor, rather than the old bytes/3 rule.
+setup_case budget_estimator
+dd if=/dev/zero of="$CASE_DIR/large.txt" bs=1024 count=16 2>/dev/null
+git -C "$CASE_DIR" add large.txt
+git -C "$CASE_DIR" commit -qm add-large-target
+source_bytes="$(wc -c < "$CASE_DIR/large.txt" | tr -d ' ')"
+make_contract large.txt "true" "$CASE_DIR/contract.json"
+run_dispatch "$(cat "$CASE_DIR/contract.json")" || fail "large estimator contract should run"
+SOURCE_BYTES="$source_bytes" python3 - "$ARTIFACT_DIR/request.1" <<'PY'
+import json
+import pathlib
+import sys
+import os
+
+request = json.loads(pathlib.Path(sys.argv[1]).read_text())
+source_bytes = int(os.environ["SOURCE_BYTES"])
+expected = (source_bytes * 10) // 24 + 256
+actual = request["options"]["num_predict"]
+assert source_bytes * 10 // 24 > 4096, source_bytes
+assert actual == expected, (actual, expected)
+assert actual != source_bytes // 3 + 256, actual
+PY
+pass "large-source output budget uses 10/24 estimator"
 
 # Phase 2: context_files support: validation and injection
 setup_case context_test
@@ -1091,5 +1160,90 @@ contains "$STDERR_PATH" "Why: A previous contract branch" "dirty tree why descri
 contains "$STDERR_PATH" "What to do: Checkout your base branch" "dirty tree what to do recommendation"
 contains "$STDERR_PATH" "Offending git status:" "dirty tree offending git status"
 pass "sequential contract dirty preflight check error message"
+
+# ── Dependency-manifest guard: package.json version/downgrade safety ──
+# Regression coverage for the 2026-08-28 Lead Portal Angular 22 migration
+# dogfood finding: the worker chose an invalid Angular version and separately
+# downgraded keycloak-angular instead of moving it to the compatible major.
+
+setup_case pkg_invalid_version
+printf '{"dependencies": {"keycloak-angular": "22.0.0"}}\n' > "$CASE_DIR/package.json"
+git -C "$CASE_DIR" add package.json
+git -C "$CASE_DIR" commit -qm add-package-json
+context_json='{"target_file": "package.json", "instructions": "bump left-pad", "test_command": "true"}'
+set +e
+CURL_MODE=pkg_invalid_version run_dispatch "$context_json"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "invalid dependency version should be rejected"
+contains "$STDOUT_PATH" '- Status: DEPENDENCY_GUARD_FAIL' "invalid version status"
+contains "$STDOUT_PATH" '- Restored: true' "invalid version should restore the existing manifest"
+contains "$STDOUT_PATH" 'not a recognizable version' "invalid version failure message"
+contains "$STDOUT_PATH" 'left-pad' "invalid version failure names the offending package"
+[[ "$(cat "$CASE_DIR/package.json")" == '{"dependencies": {"keycloak-angular": "22.0.0"}}' ]] || fail "invalid version must not change package.json"
+pass "invalid dependency version rejected and rolled back"
+
+setup_case pkg_downgrade_blocked
+printf '{"dependencies": {"keycloak-angular": "22.0.0"}}\n' > "$CASE_DIR/package.json"
+git -C "$CASE_DIR" add package.json
+git -C "$CASE_DIR" commit -qm add-package-json
+context_json='{"target_file": "package.json", "instructions": "update keycloak-angular", "test_command": "true"}'
+set +e
+CURL_MODE=pkg_downgrade run_dispatch "$context_json"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "unapproved dependency downgrade should be rejected"
+contains "$STDOUT_PATH" '- Status: DEPENDENCY_GUARD_FAIL' "downgrade status"
+contains "$STDOUT_PATH" '- Restored: true' "downgrade should restore the existing manifest"
+contains "$STDOUT_PATH" 'downgrade from 22.0.0 to 15.0.0' "downgrade failure message"
+contains "$STDOUT_PATH" 'allow_downgrade' "downgrade failure names the opt-in escape hatch"
+[[ "$(cat "$CASE_DIR/package.json")" == '{"dependencies": {"keycloak-angular": "22.0.0"}}' ]] || fail "blocked downgrade must not change package.json"
+pass "unapproved dependency downgrade rejected and rolled back"
+
+setup_case pkg_downgrade_allowed
+printf '{"dependencies": {"keycloak-angular": "22.0.0"}}\n' > "$CASE_DIR/package.json"
+git -C "$CASE_DIR" add package.json
+git -C "$CASE_DIR" commit -qm add-package-json
+context_json='{"target_file": "package.json", "instructions": "intentionally revert keycloak-angular", "test_command": "true", "allow_downgrade": ["keycloak-angular"]}'
+CURL_MODE=pkg_downgrade run_dispatch "$context_json" || fail "explicitly allowed downgrade should pass"
+contains "$STDOUT_PATH" '- Status: PASS' "allowed downgrade status"
+[[ "$(cat "$CASE_DIR/package.json")" == '{"dependencies": {"keycloak-angular": "15.0.0"}}' ]] || fail "allowed downgrade should be applied"
+pass "explicitly allowed dependency downgrade is accepted"
+
+setup_case pkg_upgrade
+printf '{"dependencies": {"keycloak-angular": "22.0.0"}}\n' > "$CASE_DIR/package.json"
+git -C "$CASE_DIR" add package.json
+git -C "$CASE_DIR" commit -qm add-package-json
+context_json='{"target_file": "package.json", "instructions": "bump keycloak-angular to the Angular 22 compatible major", "test_command": "true"}'
+CURL_MODE=pkg_upgrade run_dispatch "$context_json" || fail "ordinary dependency upgrade should pass"
+contains "$STDOUT_PATH" '- Status: PASS' "upgrade status"
+[[ "$(cat "$CASE_DIR/package.json")" == '{"dependencies": {"keycloak-angular": "22.1.0"}}' ]] || fail "upgrade should be applied"
+pass "ordinary dependency upgrade is unaffected by the guard"
+
+setup_case pkg_legitimate_forms
+printf '{"dependencies": {"p1": "1.0.0", "p2": "1.0.0", "p3": "1.0.0", "p4": "1.0.0", "p5": "1.0.0", "p6": "1.0.0", "p7": "1.0.0"}}\n' > "$CASE_DIR/package.json"
+git -C "$CASE_DIR" add package.json
+git -C "$CASE_DIR" commit -qm add-package-json
+context_json='{"target_file": "package.json", "instructions": "use legitimate npm version forms", "test_command": "true"}'
+CURL_MODE=pkg_legitimate_forms run_dispatch "$context_json" || fail "legitimate npm version forms should pass guard"
+contains "$STDOUT_PATH" '- Status: PASS' "legitimate forms status"
+pass "legitimate npm version forms (^1, 1.2, 1.x, 1.2.x, ~2, workspace:*, ^1.2.3) pass the guard"
+
+# ── Verification timeout is reported as a diagnosable stall, not a bare test failure ──
+# Regression coverage for the 2026-08-28 dogfood finding: the follow-up
+# test-writing contract stalled with no distinguishing signal from a normal
+# test failure.
+setup_case verification_stall
+make_contract target.txt "sleep 3" "$CASE_DIR/contract.json"
+set +e
+DELEGATE_TEST_TIMEOUT=1 run_dispatch "$(cat "$CASE_DIR/contract.json")"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "timed-out verification should return nonzero"
+contains "$STDOUT_PATH" '- Status: TIMEOUT' "timeout status is TIMEOUT"
+contains "$STDOUT_PATH" '- Restored: true' "timeout should restore the existing target"
+contains "$STDOUT_PATH" 'timed out after 1s' "timeout hint names the configured timeout"
+contains "$STDOUT_PATH" 'looks like a stall rather than a normal test failure' "timeout hint is diagnosable"
+pass "verification timeout is distinguished from a generic test failure"
 
 echo "All contract-router tests passed."

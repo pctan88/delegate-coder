@@ -81,7 +81,10 @@ if os.environ.get("CONTEXT_FILES"):
             fence = "`" * max(3, (max(runs) + 1) if runs else 3)
             user += f"\nFile: {cf}\n{fence}\n{cf_content}\n{fence}\n"
 
-expected = max(256, (len(source)+2)//3) + int(os.environ.get("OUTPUT_HEADROOM", "0"))
+# Measured ~2.58 bytes/token for JSON-escaped whole-file output; bytes/3
+# under-budgeted and truncated. 2.4 leaves ~7% margin. Raising the cap
+# cannot alter a run that already fit it, so prior passes are unaffected.
+expected = max(256, (len(source)*10)//24) + int(os.environ.get("OUTPUT_HEADROOM", "0"))
 if (len((os.environ['SYSTEM_PROMPT']+user).encode())+2)//3 + expected + 256 > int(limit): raise SystemExit("prompt plus expected output exceeds context")
 payload = {"model":model,"system":os.environ["SYSTEM_PROMPT"],"prompt":user,"stream":False,"format":{"type":"object","properties":{"updated_file":{"type":"string"}},"required":["updated_file"],"additionalProperties":False},"options":{"num_ctx":int(limit),"temperature":0,"num_predict":expected+256},"keep_alive":keep_alive}
 if os.environ.get("THINK") in ("true","false"): payload["think"] = os.environ["THINK"] == "true"

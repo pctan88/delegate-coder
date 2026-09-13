@@ -2,6 +2,15 @@
 
 This repo is a Claude Code **plugin marketplace** (`tan-tools`). The plugin `delegate-coder` (`plugins/delegate-coder/`) delegates execution-heavy coding work to a cheaper worker agent (MiMo, Aider, Codex CLI, Gemini CLI, Qwen Code, OpenCode), and an A/B benchmark harness (`benchmark/`) measures whether the skill reduces Claude credit usage without hurting accuracy.
 
+## Local Qwen stack
+
+Read `docs/LOCAL_QWEN_STACK.md` before touching Ollama, model routing, or
+debugging a local-worker failure. It documents the model inventory, which model to
+route to, and five traps that each look like something other than what they are.
+Reconciled with `~/Cowork/AI/SETUP.md` on 2026-08-22 (one correction: its
+Cellar-template fix does not work on this Homebrew). Run
+`bash benchmark/check_ollama_env.sh` to diagnose the stack in one shot.
+
 ## Layout
 
 - `.claude-plugin/marketplace.json` — marketplace manifest (`tan-tools`), points at `./plugins/delegate-coder`

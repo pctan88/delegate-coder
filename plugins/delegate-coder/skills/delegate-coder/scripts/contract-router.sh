@@ -32,7 +32,9 @@ done
 
 fail() {
   ERROR_MESSAGE="$*"
-  FINAL_STATUS="FAIL"
+  if [[ -z "$FINAL_STATUS" || "$FINAL_STATUS" == "FAIL" ]]; then
+    FINAL_STATUS="FAIL"
+  fi
   exit 1
 }
 
@@ -201,6 +203,13 @@ for index, item in enumerate(items, 1):
     if "context_files" in item and item["context_files"] is not None:
         if not isinstance(item["context_files"], list) or not all(isinstance(f, str) for f in item["context_files"]):
             raise ValueError(f"contract {index}: context_files must be a JSON array of strings")
+    # Dependency guard: allow_downgrade must be a boolean, or an array of package-name strings.
+    if "allow_downgrade" in item and item["allow_downgrade"] is not None:
+        allow_downgrade = item["allow_downgrade"]
+        valid_bool = isinstance(allow_downgrade, bool)
+        valid_list = isinstance(allow_downgrade, list) and all(isinstance(name, str) for name in allow_downgrade)
+        if not (valid_bool or valid_list):
+            raise ValueError(f"contract {index}: allow_downgrade must be a boolean or a JSON array of strings")
 PY
     then
       return 0
@@ -296,10 +305,39 @@ PY
   done < "$BATCH_MANIFEST"
 
   [[ "$BATCH_FAILED" -eq 0 ]] && BATCH_SKIPPED=0
+  local batch_targets_json batch_changed_count batch_commit_sha batch_test_cmd
+  batch_targets_json="$(python3 - "$BATCH_MANIFEST" <<'PY'
+import json, pathlib, sys
+manifest = pathlib.Path(sys.argv[1]).read_text().splitlines()
+targets = []
+for p in manifest:
+    if p.strip():
+        data = json.loads(pathlib.Path(p.strip()).read_text())
+        t = data.get("target_file")
+        if t and t not in targets:
+            targets.append(t)
+print(json.dumps(targets))
+PY
+)"
+  batch_changed_count="$BATCH_COMPLETED"
+  batch_commit_sha="null"
+  if [[ "$BATCH_FAILED" -eq 0 ]]; then
+    if [[ -z "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all 2>/dev/null)" ]]; then
+      batch_commit_sha="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || echo "null")"
+    fi
+  fi
+  batch_test_cmd="null"
+
   {
     printf '# Contract Batch Result\n\n'
     [[ "$BATCH_FAILED" -eq 0 ]] && printf -- '- Status: PASS\n' || printf -- '- Status: FAIL\n'
     printf -- '- Branch: %s\n' "$BRANCH_NAME"
+    printf -- '- Repo: %s\n' "$(basename "$ROOT_DIR")"
+    printf -- '- Git root: %s\n' "$ROOT_DIR"
+    printf -- '- Target files: %s\n' "$batch_targets_json"
+    printf -- '- Test command: %s\n' "$batch_test_cmd"
+    printf -- '- Commit SHA: %s\n' "$batch_commit_sha"
+    printf -- '- Changed files count: %s\n' "$batch_changed_count"
     printf -- '- Completed: %s\n' "$BATCH_COMPLETED"
     printf -- '- Failed: %s\n' "$BATCH_FAILED"
     printf -- '- Skipped: %s\n' "$BATCH_SKIPPED"
@@ -344,6 +382,18 @@ for f in context_files:
     if not isinstance(f, str):
         raise ValueError("context_files items must be strings")
 (destination / "context_files.json").write_text(json.dumps(context_files, ensure_ascii=False))
+
+# Dependency guard: allow_downgrade is optional; boolean true allows every
+# downgrade in this contract, or pass an array of package names to allow
+# individually. Defaults to no downgrades permitted.
+allow_downgrade = value.get("allow_downgrade")
+if allow_downgrade is None:
+    allow_downgrade = []
+elif not (isinstance(allow_downgrade, bool) or isinstance(allow_downgrade, list)):
+    raise ValueError("allow_downgrade must be a boolean or a JSON array of strings")
+elif isinstance(allow_downgrade, list) and not all(isinstance(item, str) for item in allow_downgrade):
+    raise ValueError("allow_downgrade array items must be strings")
+(destination / "allow_downgrade.json").write_text(json.dumps(allow_downgrade, ensure_ascii=False))
 PY
 }
 
@@ -356,6 +406,8 @@ parse_contract_regex() {
   done
   # Phase 2: ensure context_files.json has an empty array fallback
   echo "[]" > "$WORK_DIR/parsed/context_files.json"
+  # Dependency guard: no downgrades permitted when the regex fallback parser is used.
+  echo "[]" > "$WORK_DIR/parsed/allow_downgrade.json"
 }
 
 snapshot_target() {
@@ -403,7 +455,12 @@ $target_status"
   if [[ -f "$TARGET_PATH" ]]; then
     ORIGINAL_EXISTS=1
     cp "$TARGET_PATH" "$ORIGINAL_FILE" || fail "could not snapshot target file"
-    ORIGINAL_MODE="$(stat -f '%Lp' "$TARGET_PATH" 2>/dev/null || stat -c '%a' "$TARGET_PATH" 2>/dev/null || echo 644)"
+    # GNU stat's "-f" means "filesystem status", not "format" (that's BSD/macOS
+    # stat's meaning of -f); on Linux, "stat -f '%Lp' file" silently succeeds
+    # printing an unrelated filesystem-info dump instead of erroring, so the
+    # BSD form must not be tried first or it wins the `||` chain with garbage.
+    # Try the GNU form first (errors cleanly on macOS/BSD stat), then the BSD form.
+    ORIGINAL_MODE="$(stat -c '%a' "$TARGET_PATH" 2>/dev/null || stat -f '%Lp' "$TARGET_PATH" 2>/dev/null || echo 644)"
   else
     ORIGINAL_EXISTS=0
     : > "$ORIGINAL_FILE"
@@ -653,7 +710,11 @@ if context_files_path.exists():
                 raise SystemExit(f"contract-router: failed to read context file {cf}: {e}")
 
 prompt_tokens = (len((system_prompt + user).encode("utf-8")) + 2) // 3
-expected_output_tokens = max(256, (len(source_bytes) + 2) // 3) + int(os.environ.get("DELEGATE_OUTPUT_HEADROOM", "0"))
+# Measured, not guessed: whole-file JSON-escaped output came in at ~2.58 bytes
+# per token across 1.4 KB / 3.9 KB / 10.3 KB targets, so the old bytes/3 estimate
+# under-budgeted by ~14%. The 4096 floor hid that below ~10 KB; above it, every
+# request truncated. 2.4 leaves ~7% margin over the measured ratio.
+expected_output_tokens = max(256, (len(source_bytes) * 10) // 24) + int(os.environ.get("DELEGATE_OUTPUT_HEADROOM", "0"))
 reserved_tokens = 256
 output_budget = expected_output_tokens + reserved_tokens
 
@@ -726,6 +787,8 @@ generate_file() {
   if is_loopback_host; then curl_args+=(--noproxy '*'); fi
   if ! curl "${curl_args[@]}" > "$RESPONSE_FILE"; then
     ERROR_MESSAGE="Ollama request failed at $OLLAMA_HOST/api/generate"
+    FINAL_STATUS="WORKER_START_FAIL"
+    HINT_MESSAGE="Ensure Ollama is running at $OLLAMA_HOST and model $MODEL is pulled ('ollama pull $MODEL')"
     return 1
   fi
   if ! capture_response; then
@@ -740,6 +803,8 @@ except Exception as exc:
     print(f"malformed Ollama response: {exc}")
 PY
 )"
+    FINAL_STATUS="WORKER_START_FAIL"
+    HINT_MESSAGE="Ollama returned invalid structured output. Check model compatibility or schema budget."
     return 1
   fi
 }
@@ -785,7 +850,10 @@ find_project_interpreter() {
     [[ -x "$candidate" ]] && interpreter_works "$candidate" && { echo "$candidate"; return 0; }
   done
   # python3 before bare python: python3 is the portable modern name, and bare
-  # python is the one most often shadowed by a broken shim.
+  # python is the one most often shadowed by a broken shim. NOTE: detect-test.sh
+  # deliberately differs (python before python3, no interpreter_works probe) —
+  # it only names a test command for a human-approved contract, while this
+  # function must hand run_preflight an interpreter that actually executes.
   for candidate in python3 python; do
     command -v "$candidate" >/dev/null 2>&1 && interpreter_works "$candidate" && { echo "$candidate"; return 0; }
   done
@@ -838,6 +906,13 @@ run_preflight() {
         echo "contract-router: preflight skipped: tsc not found" >&2
       fi
       ;;
+    json)
+      echo "contract-router: running syntax preflight check: json.load \"$TARGET_PATH\"" >&2
+      python3 -c 'import json,sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    json.load(handle)' "$TARGET_PATH" > "$TEST_LOG" 2>&1
+      preflight_status=$?
+      ;;
   esac
 
   if [[ "$preflight_status" -ne 0 ]]; then
@@ -845,6 +920,41 @@ run_preflight() {
     return "$preflight_status"
   fi
   return 0
+}
+
+# Dependency-manifest guard: catches two failure modes seen from local
+# workers on package.json contracts (2026-08-28 Lead Portal Angular 22
+# migration dogfood) -- a hallucinated/invalid version string, and a silent
+# downgrade of an existing dependency instead of the intended upgrade
+# (observed: keycloak-angular moved backward instead of to the Angular-22
+# compatible major). Runs after syntax preflight (so we know the candidate is
+# valid JSON) and before the project test_command, matching the existing
+# "cheap checks before expensive test command" ordering.
+run_dependency_guard() {
+  local manifest_name="$TARGET_NAME"
+  case "$manifest_name" in
+    package.json) ;;
+    *) return 0 ;;
+  esac
+  echo "contract-router: running dependency manifest guard for $manifest_name" >&2
+  local allow_downgrade_json="$WORK_DIR/parsed/allow_downgrade.json"
+  [[ -f "$allow_downgrade_json" ]] || echo "[]" > "$allow_downgrade_json"
+  SCRIPT_LIB="$ROUTER_DIR/lib" python3 - "$manifest_name" "$ORIGINAL_FILE" "$CANDIDATE_FILE" "$allow_downgrade_json" "$ORIGINAL_EXISTS" > "$TEST_LOG" 2>&1 <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+sys.path.insert(0, os.environ["SCRIPT_LIB"])
+from validate_dependency_manifest import check
+
+manifest_name, original_path, candidate_path, allow_path, original_exists = sys.argv[1:6]
+original_text = pathlib.Path(original_path).read_text(encoding="utf-8") if original_exists == "1" else "{}"
+candidate_text = pathlib.Path(candidate_path).read_text(encoding="utf-8")
+allow_downgrade = json.loads(pathlib.Path(allow_path).read_text(encoding="utf-8"))
+check(manifest_name, original_text, candidate_text, allow_downgrade, label="contract-router")
+print("dependency manifest guard passed")
+PY
 }
 
 run_tests() {
@@ -855,6 +965,13 @@ run_tests() {
   if [[ "$preflight_rc" -ne 0 ]]; then
     LAST_FAILURE_TYPE="PREFLIGHT"
     return "$preflight_rc"
+  fi
+
+  run_dependency_guard
+  local dependency_rc=$?
+  if [[ "$dependency_rc" -ne 0 ]]; then
+    LAST_FAILURE_TYPE="DEPENDENCY_GUARD"
+    return "$dependency_rc"
   fi
 
   echo "contract-router: running verification" >&2
@@ -871,9 +988,15 @@ run_tests() {
   fi
   TEST_EXIT=$?
   if [[ "$TEST_EXIT" -ne 0 ]]; then
-    LAST_FAILURE_TYPE="TEST"
-    if [[ "$TEST_EXIT" -eq 127 ]]; then
-      HINT_MESSAGE="verification command binary not found (exit code 127; check PATH or use absolute path in test_command)"
+    if [[ "$TEST_EXIT" -eq 124 || "$TEST_EXIT" -eq 142 ]]; then
+      LAST_FAILURE_TYPE="TIMEOUT"
+      ERROR_MESSAGE="verification command timed out after ${TEST_TIMEOUT}s"
+      HINT_MESSAGE="verification command timed out after ${TEST_TIMEOUT}s (DELEGATE_TEST_TIMEOUT); this looks like a stall rather than a normal test failure. The task may be too open-ended for a single-file contract -- narrow the instructions/test_command scope, split into a smaller per-file contract, or raise DELEGATE_TEST_TIMEOUT if the command is genuinely expected to run this long."
+    else
+      LAST_FAILURE_TYPE="TEST"
+      if [[ "$TEST_EXIT" -eq 127 ]]; then
+        HINT_MESSAGE="verification command binary not found (exit code 127; check PATH or use absolute path in test_command)"
+      fi
     fi
   fi
   return "$TEST_EXIT"
@@ -938,15 +1061,38 @@ emit_report() {
       cp "$CANDIDATE_FILE" "$SAVED_CANDIDATE_PATH"
     fi
     if [[ "$SNAPSHOT_READY" -eq 1 ]] && worktree_needs_restore; then
-      restore_worktree || ERROR_MESSAGE="could not restore worktree after failure"
+      if ! restore_worktree; then
+        FINAL_STATUS=RESTORE_FAIL
+        ERROR_MESSAGE="could not restore worktree after failure"
+      fi
     fi
   fi
   build_candidate_diff
+  local single_target_json single_changed_count single_commit_sha
+  if command -v python3 >/dev/null 2>&1; then
+    single_target_json="$(python3 -c 'import json, sys; print(json.dumps([sys.argv[1]]))' "$TARGET_FILE")"
+  else
+    single_target_json="[\"$TARGET_FILE\"]"
+  fi
+  single_changed_count="$([[ "$ACCEPTED" -eq 1 ]] && echo 1 || echo 0)"
+  single_commit_sha="null"
+  if [[ "$ACCEPTED" -eq 1 ]]; then
+    if [[ -z "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all 2>/dev/null)" ]]; then
+      single_commit_sha="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || echo "null")"
+    fi
+  fi
+
   printf '# Contract Result\n\n'
   printf -- '- Status: %s\n' "$FINAL_STATUS"
   printf -- '- Retries: %s\n' "$RETRY_COUNT"
   printf -- '- Target: %s\n' "$TARGET_FILE"
+  printf -- '- Target files: %s\n' "$single_target_json"
   printf -- '- Branch: %s\n' "$BRANCH_NAME"
+  printf -- '- Repo: %s\n' "$(basename "$ROOT_DIR")"
+  printf -- '- Git root: %s\n' "$ROOT_DIR"
+  printf -- '- Test command: %s\n' "$TEST_COMMAND"
+  printf -- '- Commit SHA: %s\n' "$single_commit_sha"
+  printf -- '- Changed files count: %s\n' "$single_changed_count"
   printf -- '- Restored: %s\n' "$([[ "$RESTORED" -eq 1 ]] && echo true || echo false)"
   printf -- '- Candidate accepted: %s\n' "$([[ "$ACCEPTED" -eq 1 ]] && echo true || echo false)"
   [[ -n "$SAVED_CANDIDATE_PATH" ]] && printf -- '- Worker candidate saved to: %s\n' "$SAVED_CANDIDATE_PATH"
@@ -1005,6 +1151,12 @@ else
     PREFLIGHT_FAIL_COUNT=$((PREFLIGHT_FAIL_COUNT + 1))
     FINAL_STATUS=PREFLIGHT_FAIL
     [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="syntax preflight check failed"
+  elif [[ "$LAST_FAILURE_TYPE" == "DEPENDENCY_GUARD" ]]; then
+    FINAL_STATUS=DEPENDENCY_GUARD_FAIL
+    [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="dependency manifest guard failed (invalid version or unapproved downgrade)"
+  elif [[ "$LAST_FAILURE_TYPE" == "TIMEOUT" ]]; then
+    FINAL_STATUS=TIMEOUT
+    [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="verification command timed out"
   elif [[ "$LAST_FAILURE_TYPE" == "TEST" ]]; then
     FINAL_STATUS=TEST_FAIL
     [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="verification command failed"
@@ -1024,6 +1176,12 @@ else
           PREFLIGHT_FAIL_COUNT=$((PREFLIGHT_FAIL_COUNT + 1))
           FINAL_STATUS=PREFLIGHT_FAIL
           [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="syntax preflight check failed"
+        elif [[ "$LAST_FAILURE_TYPE" == "DEPENDENCY_GUARD" ]]; then
+          FINAL_STATUS=DEPENDENCY_GUARD_FAIL
+          [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="dependency manifest guard failed (invalid version or unapproved downgrade)"
+        elif [[ "$LAST_FAILURE_TYPE" == "TIMEOUT" ]]; then
+          FINAL_STATUS=TIMEOUT
+          [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="verification command timed out"
         elif [[ "$LAST_FAILURE_TYPE" == "TEST" ]]; then
           FINAL_STATUS=TEST_FAIL
           [[ -n "$ERROR_MESSAGE" ]] || ERROR_MESSAGE="verification command failed"
@@ -1047,7 +1205,7 @@ fi
 AFTER_OTHER_STATUS="$(status_without_target "$TARGET_FILE")"
 if [[ "$AFTER_OTHER_STATUS" != "$BASE_OTHER_STATUS" ]]; then
   OUTSIDE_CHANGES="$AFTER_OTHER_STATUS"
-  FINAL_STATUS=FAIL
+  FINAL_STATUS=DEPENDENCY_GUARD_FAIL
   ERROR_MESSAGE="verification changed files outside target_file"
 fi
 emit_report

@@ -7,6 +7,8 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
 DISPATCH="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/delegate.sh"
 DETECT_TEST="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/detect-test.sh"
+STATS="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/stats.sh"
+REPORT="$REPO_ROOT/plugins/delegate-coder/skills/delegate-coder/scripts/report.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/delegate-coder-core-test.XXXXXX")"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 mkdir -p "$TEST_ROOT/home"
@@ -216,10 +218,95 @@ DELEGATE_AGENT=codex run_dispatch read "understand" >/dev/null 2>&1 || fail "aud
 LOG="$CASE_DIR/.claude/delegate-coder.log"
 [[ -f "$LOG" ]] || fail "audit log should be created"
 contains "$LOG" '"event":"start"' "audit log should record start"
-contains "$LOG" '"event":"end"' "audit log should record end"
 contains "$LOG" '"agent":"codex"' "audit log should record agent"
-jq -e 'select(.event=="end") | .exit_code == 0' "$LOG" >/dev/null 2>&1 || fail "end event should carry exit_code"
-pass "audit log records start/end with agent and exit_code"
+jq -se 'any(.[]; .event=="end" and .exit_code == 0)' "$LOG" >/dev/null 2>&1 || fail "end event should carry exit_code"
+jq -se 'any(.[]; .event=="start" and .run_id != null and .task_id != null and .attempt == 1 and .parent_run_id == null)' "$LOG" >/dev/null 2>&1 || fail "start event should carry correlation fields"
+jq -se 'any(.[]; .event=="end" and .run_id != null and .task_id != null and .attempt == 1 and .status == "PASS")' "$LOG" >/dev/null 2>&1 || fail "end event should carry correlation fields and status PASS"
+jq -se 'any(.[]; .event=="start" and .repo == "audit" and .git_root != null and .branch != null and .target_files == [] and .changed_file_count == 0)' "$LOG" >/dev/null 2>&1 || fail "start event should carry context metadata"
+jq -se 'any(.[]; .event=="end" and .repo == "audit" and .git_root != null and .branch != null and .target_files == [] and .changed_file_count == 0 and .test_command == null and .commit_sha == null)' "$LOG" >/dev/null 2>&1 || fail "end event should carry context metadata"
+pass "audit log records start/end with agent, exit_code, correlation, and context metadata"
+
+# ── delegate.sh: explicit DELEGATE_TASK_ID propagation ───────────────────
+setup_case audit_task_id
+CUSTOM_TASK_ID="12345678-1234-5678-1234-567812345678"
+DELEGATE_AGENT=codex DELEGATE_TASK_ID="$CUSTOM_TASK_ID" run_dispatch read "understand" >/dev/null 2>&1 || fail "audit with task_id run failed"
+LOG="$CASE_DIR/.claude/delegate-coder.log"
+jq -se --arg tid "$CUSTOM_TASK_ID" 'any(.[]; .event=="start" and .task_id == $tid)' "$LOG" >/dev/null 2>&1 || fail "start event should preserve DELEGATE_TASK_ID"
+jq -se --arg tid "$CUSTOM_TASK_ID" 'any(.[]; .event=="end" and .task_id == $tid)' "$LOG" >/dev/null 2>&1 || fail "end event should preserve DELEGATE_TASK_ID"
+pass "audit log preserves explicit DELEGATE_TASK_ID"
+
+# ── delegate.sh: missing agent logs WORKER_START_FAIL ─────────────────────
+setup_case missing_agent_audit
+mkdir -p "$CASE_DIR/.claude"
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
+{ "agent": "delegate_coder_missing_agent_9fd0d3", "fallback": "graceful" }
+JSON
+run_dispatch exec "do it" >/dev/null 2>&1 || true
+LOG="$CASE_DIR/.claude/delegate-coder.log"
+jq -se 'any(.[]; .event=="end" and .status == "WORKER_START_FAIL" and .exit_code == 4 and (.error | contains("not found")) and (.hint | contains("Install")))' "$LOG" >/dev/null 2>&1 || fail "missing agent should log WORKER_START_FAIL with exit 4, error and hint"
+pass "missing agent logs start and end with WORKER_START_FAIL"
+
+# ── delegate.sh: allow_paths violation logs DEPENDENCY_GUARD_FAIL ─────────
+setup_case allow_paths_audit
+mkdir -p "$CASE_DIR/.claude"
+cat > "$CASE_DIR/.claude/delegate-coder.json" <<'JSON'
+{ "agent": "codex", "allow_paths": ["lib/"] }
+JSON
+FAKE_TOUCH="$CASE_DIR/src/other.txt" DELEGATE_AGENT=codex run_dispatch exec "edit" >/dev/null 2>&1 || true
+LOG="$CASE_DIR/.claude/delegate-coder.log"
+jq -se 'any(.[]; .event=="end" and .exit_code == 6 and .status == "DEPENDENCY_GUARD_FAIL" and (.error | contains("allow_paths")) and (.hint | contains("Add")))' "$LOG" >/dev/null 2>&1 || fail "allow_paths failure should log DEPENDENCY_GUARD_FAIL with exit 6, error and hint"
+[[ "$(jq -s '[.[] | select(.event=="end")] | length' "$LOG")" -eq 1 ]] || fail "expected exactly one end event per run"
+pass "allow_paths violation logs DEPENDENCY_GUARD_FAIL"
+
+# ── validate_dependency_manifest.py unit tests ────────────────────────────
+python3 - <<'PY' || fail "validate_dependency_manifest unit tests failed"
+import sys
+from pathlib import Path
+repo_root = Path.cwd()
+sys.path.insert(0, str(repo_root / "plugins/delegate-coder/skills/delegate-coder/scripts/lib"))
+from validate_dependency_manifest import _parse, check
+
+# 1. Unvalidatable / legitimate forms should return None
+for legit in ["^1", "1.2", "1.x", "1.2.x", "~2", "workspace:*", "^1.2.3", "1.*", "1.2.*", "x", "*"]:
+    res = _parse(legit)
+    if legit == "^1.2.3":
+        assert res == (1, 2, 3), f"^1.2.3 expected (1, 2, 3), got {res}"
+    else:
+        assert res is None, f"{legit} expected None (skip), got {res}"
+
+# 2. Invalid non-version forms should return "invalid"
+for bad in ["abc", "", "   ", "not-a-version"]:
+    assert _parse(bad) == "invalid", f"{bad} expected invalid, got {_parse(bad)}"
+
+# 3. Check full manifest checks:
+# 3a. Legitimate forms PASS
+orig = '{"dependencies": {"p1": "1.0.0", "p2": "1.0.0", "p3": "1.0.0", "p4": "1.0.0", "p5": "1.0.0", "p6": "1.0.0", "p7": "1.0.0"}}'
+cand = '{"dependencies": {"p1": "^1", "p2": "1.2", "p3": "1.x", "p4": "1.2.x", "p5": "~2", "p6": "workspace:*", "p7": "^1.2.3"}}'
+check("package.json", orig, cand, label="test")
+
+# 3b. Real downgrade FAILS
+cand_downgrade = '{"dependencies": {"pkg": "^1.0.0"}}'
+orig_downgrade = '{"dependencies": {"pkg": "^2.0.0"}}'
+try:
+    check("package.json", orig_downgrade, cand_downgrade, label="test")
+    assert False, "expected downgrade to fail"
+except SystemExit:
+    pass
+
+# 3c. Downgrade with allow_downgrade PASSES
+check("package.json", orig_downgrade, cand_downgrade, allow_downgrade=["pkg"], label="test")
+check("package.json", orig_downgrade, cand_downgrade, allow_downgrade=True, label="test")
+
+# 3d. Non-version garbage "abc" FAILS
+cand_garbage = '{"dependencies": {"pkg": "abc"}}'
+try:
+    check("package.json", orig_downgrade, cand_garbage, label="test")
+    assert False, "expected abc to fail"
+except SystemExit:
+    pass
+
+PY
+pass "validate_dependency_manifest: legitimate forms, downgrades, allow_downgrade, and invalid values"
 
 # ── detect-test.sh: per-ecosystem inference ───────────────────────────────
 dt() { ( cd "$1" && bash "$DETECT_TEST" ); }
@@ -445,5 +532,100 @@ run_dispatch read "$legacy_task" >/dev/null 2>&1 || fail "legacy double quoted r
 arg_received="$(cat "$CASE_DIR/worker_arg1")"
 [[ "$arg_received" == "$legacy_task" ]] || fail "legacy double-quoted output corrupted: expected '$legacy_task' but got '$arg_received'"
 pass "command_override handles legacy double-quoted \"{task}\" correctly"
+
+# ── stats.sh: single log, multi-log fleet, --json export, and token stats ───
+setup_case stats_fleet_test
+LOG1="$CASE_DIR/.claude/delegate-coder.log"
+mkdir -p "$CASE_DIR/.claude"
+cat > "$LOG1" <<'JSONL'
+{"event":"start","agent":"codex","model":"gpt-4","mode":"exec","run_id":"r1","task_id":"t1","attempt":1,"ts":"2026-09-12T00:00:00Z"}
+{"event":"end","agent":"codex","model":"gpt-4","mode":"exec","run_id":"r1","task_id":"t1","attempt":1,"duration_s":10,"exit_code":0,"status":"PASS","ts":"2026-09-12T00:00:10Z"}
+{"event":"start","agent":"local-ollama","model":"qwen3-coder:30b","mode":"contract","run_id":"r2","task_id":"t2","attempt":1,"ts":"2026-09-12T00:01:00Z"}
+{"event":"end","agent":"local-ollama","model":"qwen3-coder:30b","mode":"contract","run_id":"r2","task_id":"t2","attempt":1,"duration_s":5,"exit_code":1,"status":"PREFLIGHT_FAIL","prompt_eval_count":100,"eval_count":50,"ts":"2026-09-12T00:01:05Z"}
+{"event":"start","agent":"local-ollama","model":"qwen3-coder:30b","mode":"contract","run_id":"r3","task_id":"t2","attempt":2,"parent_run_id":"r2","ts":"2026-09-12T00:01:10Z"}
+{"event":"end","agent":"local-ollama","model":"qwen3-coder:30b","mode":"contract","run_id":"r3","task_id":"t2","attempt":2,"duration_s":15,"exit_code":0,"status":"PASS","prompt_eval_count":150,"eval_count":80,"ts":"2026-09-12T00:01:25Z"}
+JSONL
+
+# Test 1: Single file default stats
+out1="$(bash "$STATS" "$LOG1")"
+contains_str() { grep -Fq -- "$2" <<< "$1" || fail "$3"; }
+contains_str "$out1" "Total delegations:  3" "stats.sh single file total delegations"
+contains_str "$out1" "Completions logged: 3" "stats.sh single file completions"
+contains_str "$out1" "Logical tasks:      2 (Attempts: 3)" "stats.sh logical tasks count"
+contains_str "$out1" "Pass rate:          66.7%" "stats.sh pass rate"
+contains_str "$out1" "PREFLIGHT_FAIL" "stats.sh status breakdown"
+contains_str "$out1" "Prompt tokens:     250" "stats.sh prompt token sum"
+pass "stats.sh single file summary with tasks, status breakdown, and tokens"
+
+# Test 2: JSON export mode
+out_json="$(bash "$STATS" --json "$LOG1")"
+python3 - "$out_json" <<'PY' || fail "stats.sh --json schema mismatch"
+import json, sys
+data = json.loads(sys.argv[1])
+assert data["total_delegations"] == 3
+assert data["completions_logged"] == 3
+assert data["logical_tasks"] == 2
+assert data["execution_attempts"] == 3
+assert data["pass_count"] == 2
+assert data["fail_count"] == 1
+assert data["pass_rate_pct"] == 66.7
+assert data["tokens"]["total_prompt_tokens"] == 250
+assert data["tokens"]["total_completion_tokens"] == 130
+assert data["status_breakdown"].get("PREFLIGHT_FAIL") == 1
+assert data["status_breakdown"].get("PASS") == 2
+assert len(data["breakdown"]) == 2
+PY
+pass "stats.sh --json valid schema and metrics"
+
+# Test 3: Multi-file fleet aggregation
+LOG2="$CASE_DIR/other_repo.log"
+cat > "$LOG2" <<'JSONL'
+{"event":"start","agent":"mimo","model":"mimo-v1","mode":"exec","run_id":"r4","task_id":"t3","attempt":1,"ts":"2026-09-12T00:02:00Z"}
+{"event":"end","agent":"mimo","model":"mimo-v1","mode":"exec","run_id":"r4","task_id":"t3","attempt":1,"duration_s":20,"exit_code":0,"status":"PASS","ts":"2026-09-12T00:02:20Z"}
+JSONL
+out_fleet_json="$(bash "$STATS" --json "$LOG1" "$LOG2")"
+python3 - "$out_fleet_json" <<'PY' || fail "stats.sh multi-file fleet aggregation failed"
+import json, sys
+data = json.loads(sys.argv[1])
+assert len(data["files"]) == 2
+assert data["total_delegations"] == 4
+assert data["completions_logged"] == 4
+assert data["logical_tasks"] == 3
+assert data["execution_attempts"] == 4
+assert data["pass_count"] == 3
+assert data["fail_count"] == 1
+assert data["pass_rate_pct"] == 75.0
+PY
+pass "stats.sh multi-file fleet aggregation"
+
+# Test 4: Missing log files handled gracefully
+out_empty="$(bash "$STATS" "$CASE_DIR/nonexistent.log")"
+contains_str "$out_empty" "No audit log found" "stats.sh missing log output"
+pass "stats.sh missing log handled gracefully"
+
+# Test 5: stats.sh --since filtering
+out_since_recent="$(bash "$STATS" --json --since 1h "$LOG1")"
+python3 - "$out_since_recent" <<'PY' || fail "stats.sh --since 1h should filter out old entries"
+import json, sys
+data = json.loads(sys.argv[1])
+assert data["total_delegations"] == 0
+assert data["completions_logged"] == 0
+PY
+pass "stats.sh --since filters records outside cutoff"
+
+# Test 6: report.sh execution and --json structure
+out_report="$(bash "$REPORT" --json "$LOG1")"
+python3 - "$out_report" <<'PY' || fail "report.sh --json structure mismatch"
+import json, sys
+data = json.loads(sys.argv[1])
+assert data["total_tasks"] == 2
+assert data["total_runs"] == 3
+assert data["completed_runs"] == 3
+assert "codex" in data["workers"]
+assert "local-ollama" in data["workers"]
+assert data["workers"]["local-ollama"]["pass_rate_pct"] == 50.0
+assert data["workers"]["local-ollama"]["status_breakdown"].get("PREFLIGHT_FAIL") == 1
+PY
+pass "report.sh aggregates tasks and failure breakdown"
 
 echo "# all $PASS checks passed"

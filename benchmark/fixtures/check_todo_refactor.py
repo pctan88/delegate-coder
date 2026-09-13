@@ -20,7 +20,7 @@ def output_of(function, *args):
 
 def main():
     # Resolved before the chdir below; TEST_COMMAND runs at the sandbox root.
-    demo = pathlib.Path("scratch/demo_app").resolve()
+    demo = pathlib.Path("benchmark/fixtures/demo_app").resolve()
     sys.path.insert(0, str(demo))
     import todo_cli
 
