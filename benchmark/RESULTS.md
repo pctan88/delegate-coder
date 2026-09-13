@@ -149,3 +149,37 @@ Note also that the trigger *metric* itself was fixed during development: the ori
 ```
 
 *Aggregates exclude the trivial control (`implement-ping`) from causal cost claims; it is reported separately as a triggering-behavior check.*
+
+---
+
+## Local-Qwen Contract Benchmark: Flutter Target (`ilmu mobile-app-1425`)
+
+**Date**: 2026-09-13
+**Measured commit**: `b8717c7`
+**Model**: `qwen2.5-coder:7b` (Ollama local GPU inference, `num_ctx: 16384`)
+**Target repository**: `mobile-app-1425` (Flutter 3.41.6 / Dart 3.11.4)
+**Design**: 3 task shapes × 2 conditions (`direct` vs `contract`) × 5 reps = 30 runs.
+
+### Results Summary
+
+| Task Shape | Condition | n | Success | Retry Rate | Prompt Eval (ms) | Generation (ms) | Ollama Total (ms) | E2E Wall (s) | Status Breakdown |
+|---|---|---|---|---|---|---|---|---|---|
+| **mirror-with-template** | contract | 5 | **100%** (5/5) | 100% (1 retry) | 1,570.3 | 15,174.8 | 16,969.4 | 44.9s | `PASS: 5` |
+| | direct | 5 | 0% (0/5) | 0% | n/a | n/a | n/a | 0.1s | `FAIL: 5` (new file) |
+| **plain-no-template** | contract | 5 | 0% (0/5) | 100% (1 retry) | 2,145.8 | 10,992.8 | 13,306.4 | 37.6s | `TEST_FAIL: 5` |
+| | direct | 5 | 0% (0/5) | 0% | n/a | n/a | n/a | 0.0s | `FAIL: 5` (new file) |
+| **regex-escaping** | contract | 5 | **100%** (5/5) | 0% | 62.1 | 5,308.2 | 5,493.3 | 13.5s | `PASS: 5` |
+| | direct | 5 | **100%** (5/5) | 0% | 64.1 | 5,478.7 | 5,646.0 | 12.1s | `PASS: 5` |
+
+### Key Findings & Analysis
+
+1. **Template Context Is Decisive for Complex New Tests (100% vs 0%)**:
+   - On `mirror-with-template` (generating `exam_drill_session_countdown_test.dart` with source + template `duration_formatter_test.dart` in context), the local model achieved **100% success (5/5)** via contract mode after self-healing/retry.
+   - On `plain-no-template` (same target and instruction, but only source in context), the model achieved **0% success (0/5)** (`TEST_FAIL`), demonstrating that reference test structure/imports are critical for local Qwen to produce passing Flutter test suites from scratch.
+
+2. **Regex Escaping & String Literal Preservation**:
+   - On `regex-escaping` (`lib/core/utils/stt_locale.dart`), both `contract` and `direct` modes achieved **100% pass rate (5/5)** without requiring any retries (0% retry rate).
+   - Ollama generation time averaged ~5.3s–5.5s with ~12.1s–13.5s end-to-end sandbox runtime (including `flutter pub get` cache resolution and `flutter test`).
+
+3. **Direct Mode on New Files**:
+   - In `direct` mode, the benchmark harness attempts `read_bytes()` on the target file prior to sending the diff/edit prompt. When targeting an uncreated file (`test/domain/model/..._test.dart`), direct mode immediately exits (`FAIL: 5`), whereas `contract` mode seamlessly handles new file generation through its strict schema and contract router.
