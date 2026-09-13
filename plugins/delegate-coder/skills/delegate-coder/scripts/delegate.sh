@@ -571,6 +571,12 @@ if ! command -v "$AGENT" >/dev/null 2>&1; then
     # Prepare attempt 2 for fallback agent
     echo ">> Warning: Agent '$_prior_agent' not found. Adaptively falling back to '$_fallback_candidate'..." >&2
     AGENT="$_fallback_candidate"
+    # Re-resolve MODEL for fallback agent: check agent-specific model, else clear
+    MODEL=""
+    if [[ -f "$CONFIG" ]]; then
+      _cand_model="$(config_get "${AGENT}.model")"
+      [[ -n "$_cand_model" ]] && MODEL="$_cand_model"
+    fi
     DELEGATE_PARENT_RUN_ID="$_prior_run_id"
     DELEGATE_ATTEMPT=$(( DELEGATE_ATTEMPT + 1 ))
     if command -v python3 >/dev/null 2>&1; then

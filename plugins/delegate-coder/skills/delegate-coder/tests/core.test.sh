@@ -258,20 +258,50 @@ cat > "$CASE_DIR/.delegate-coder/config.json" <<'JSON'
 JSON
 run_dispatch exec "adaptive task" >/dev/null 2>&1 || fail "adaptive fallback should succeed with codex"
 LOG="$CASE_DIR/.claude/delegate-coder.log"
-jq -e 'select(.attempt==1 and .event=="end") | .status == "WORKER_START_FAIL" and .agent == "delegate_coder_missing_agent_9fd0d3" and (.hint | contains("Adaptively falling back to candidate '\''codex'\''"))' "$LOG" >/dev/null 2>&1 || fail "attempt 1 should record WORKER_START_FAIL with fallback hint"
-jq -e 'select(.attempt==2 and .event=="end") | .status == "PASS" and .agent == "codex" and .exit_code == 0' "$LOG" >/dev/null 2>&1 || fail "attempt 2 should record PASS with codex"
-# Check correlation: shared task_id, attempt 2 parent_run_id == attempt 1 run_id
-python3 - "$LOG" <<'PY' || fail "correlation mismatch across adaptive fallback attempts"
+jq -se 'any(.[]; .attempt==1 and .event=="end" and .status == "WORKER_START_FAIL" and .agent == "delegate_coder_missing_agent_9fd0d3" and (.hint | contains("Adaptively falling back to candidate '\''codex'\''")))' "$LOG" >/dev/null 2>&1 || fail "attempt 1 should record WORKER_START_FAIL with fallback hint"
+jq -se 'any(.[]; .attempt==2 and .event=="end" and .status == "PASS" and .agent == "codex" and .exit_code == 0)' "$LOG" >/dev/null 2>&1 || fail "attempt 2 should record PASS with codex"
+# Check correlation and event structure: exactly one start and end per attempt
+python3 - "$LOG" <<'PY' || fail "correlation or start/end event count mismatch across adaptive fallback attempts"
 import json, pathlib, sys
 records = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().strip().splitlines()]
-end1 = [r for r in records if r["event"] == "end" and r["attempt"] == 1][0]
-start2 = [r for r in records if r["event"] == "start" and r["attempt"] == 2][0]
-end2 = [r for r in records if r["event"] == "end" and r["attempt"] == 2][0]
+att1_starts = [r for r in records if r["event"] == "start" and r["attempt"] == 1]
+att1_ends = [r for r in records if r["event"] == "end" and r["attempt"] == 1]
+att2_starts = [r for r in records if r["event"] == "start" and r["attempt"] == 2]
+att2_ends = [r for r in records if r["event"] == "end" and r["attempt"] == 2]
+assert len(att1_starts) == 1, f"expected exactly 1 start for attempt 1, got {len(att1_starts)}"
+assert len(att1_ends) == 1, f"expected exactly 1 end for attempt 1, got {len(att1_ends)}"
+assert len(att2_starts) == 1, f"expected exactly 1 start for attempt 2, got {len(att2_starts)}"
+assert len(att2_ends) == 1, f"expected exactly 1 end for attempt 2, got {len(att2_ends)}"
+end1 = att1_ends[0]
+start2 = att2_starts[0]
+end2 = att2_ends[0]
 assert end1["task_id"] == start2["task_id"] == end2["task_id"], "task_id should be identical"
 assert start2["parent_run_id"] == end1["run_id"], "attempt 2 parent_run_id should equal attempt 1 run_id"
 assert end2["parent_run_id"] == end1["run_id"], "attempt 2 end parent_run_id should equal attempt 1 run_id"
 PY
-pass "adaptive fallback routes to fallback_agent with correlated audit trail"
+pass "adaptive fallback routes to fallback_agent with correlated audit trail and exact 1 start+end per attempt"
+
+# ── delegate.sh: adaptive fallback re-resolves / clears MODEL ──────────────
+setup_case adaptive_fallback_model_reresolution
+mkdir -p "$CASE_DIR/.delegate-coder"
+cat > "$CASE_DIR/.delegate-coder/config.json" <<'JSON'
+{
+  "agent": "delegate_coder_missing_qwen",
+  "model": "special-qwen-model-X",
+  "fallback": "graceful",
+  "fallback_agent": "codex"
+}
+JSON
+run_dispatch exec "test model reresolution" >/dev/null 2>&1 || fail "adaptive fallback should succeed with codex"
+LOG="$CASE_DIR/.claude/delegate-coder.log"
+# Attempt 1 should carry primary model "special-qwen-model-X"
+jq -se 'any(.[]; .attempt==1 and .model == "special-qwen-model-X")' "$LOG" >/dev/null 2>&1 || fail "attempt 1 should carry primary model"
+# Attempt 2 should NOT carry primary model "special-qwen-model-X"
+jq -se 'any(.[]; .attempt==2 and .model == "special-qwen-model-X")' "$LOG" >/dev/null 2>&1 && fail "attempt 2 codex should NOT have primary model X"
+# Codex fake worker should NOT have been invoked with --model special-qwen-model-X
+[[ -s "$CASE_DIR/argv.log" ]] || fail "codex should have been invoked"
+grep -Fq "special-qwen-model-X" "$CASE_DIR/argv.log" && fail "codex should not receive primary's model X in arguments"
+pass "adaptive fallback clears/re-resolves primary model for fallback agent"
 
 # ── delegate.sh: adaptive fallback through fallback_chain ─────────────────
 setup_case adaptive_fallback_chain
@@ -285,7 +315,7 @@ cat > "$CASE_DIR/.delegate-coder/config.json" <<'JSON'
 JSON
 run_dispatch exec "chain task" >/dev/null 2>&1 || fail "adaptive chain fallback should succeed with codex"
 LOG="$CASE_DIR/.claude/delegate-coder.log"
-jq -e 'select(.attempt==2 and .event=="end") | .status == "PASS" and .agent == "codex"' "$LOG" >/dev/null 2>&1 || fail "chain attempt 2 should record PASS with codex"
+jq -se 'any(.[]; .attempt==2 and .event=="end" and .status == "PASS" and .agent == "codex")' "$LOG" >/dev/null 2>&1 || fail "chain attempt 2 should record PASS with codex"
 pass "adaptive fallback routes through fallback_chain to first available candidate"
 
 # ── delegate.sh: strict fallback ignores fallback_agent ───────────────────
