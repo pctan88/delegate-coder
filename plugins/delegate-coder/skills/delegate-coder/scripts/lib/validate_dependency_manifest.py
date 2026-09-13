@@ -34,7 +34,9 @@ MANIFEST_NAMES = frozenset(["package.json"])
 _SECTIONS = ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies")
 _RANGE_PREFIX = re.compile(r"^(\^|~|>=|<=|>|<|=)+")
 _SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
-_UNVALIDATABLE = re.compile(r"^(workspace:|npm:|file:|link:|git\+|git:|https?://|\*$|latest$|next$)")
+_UNVALIDATABLE = re.compile(
+    r"^(workspace:|npm:|file:|link:|git\+|git:|https?://|\*$|latest$|next$|\d+(?:\.\d+)?$|\d+(?:\.\d+)?\.[xX*]$|\d+\.[xX*]$|[xX*]$)"
+)
 
 
 def _parse(raw):

@@ -89,6 +89,7 @@ if [[ "$mode" == bad ]]; then content=bad; fi
 if [[ "$mode" == pkg_invalid_version ]]; then content='{"dependencies": {"left-pad": "not-a-version"}}'; fi
 if [[ "$mode" == pkg_downgrade ]]; then content='{"dependencies": {"keycloak-angular": "15.0.0"}}'; fi
 if [[ "$mode" == pkg_upgrade ]]; then content='{"dependencies": {"keycloak-angular": "22.1.0"}}'; fi
+if [[ "$mode" == pkg_legitimate_forms ]]; then content='{"dependencies": {"p1": "^1", "p2": "1.2", "p3": "1.x", "p4": "1.2.x", "p5": "~2", "p6": "workspace:*", "p7": "^1.2.3"}}'; fi
 if [[ "$mode" == batch-fail && "$count" -le 2 ]]; then content=bad; fi
 if [[ "$mode" == batch-later && "$count" -ge 2 ]]; then content=bad; fi
 if [[ "$mode" == noop ]]; then content=original; fi
@@ -1218,6 +1219,15 @@ CURL_MODE=pkg_upgrade run_dispatch "$context_json" || fail "ordinary dependency 
 contains "$STDOUT_PATH" '- Status: PASS' "upgrade status"
 [[ "$(cat "$CASE_DIR/package.json")" == '{"dependencies": {"keycloak-angular": "22.1.0"}}' ]] || fail "upgrade should be applied"
 pass "ordinary dependency upgrade is unaffected by the guard"
+
+setup_case pkg_legitimate_forms
+printf '{"dependencies": {"p1": "1.0.0", "p2": "1.0.0", "p3": "1.0.0", "p4": "1.0.0", "p5": "1.0.0", "p6": "1.0.0", "p7": "1.0.0"}}\n' > "$CASE_DIR/package.json"
+git -C "$CASE_DIR" add package.json
+git -C "$CASE_DIR" commit -qm add-package-json
+context_json='{"target_file": "package.json", "instructions": "use legitimate npm version forms", "test_command": "true"}'
+CURL_MODE=pkg_legitimate_forms run_dispatch "$context_json" || fail "legitimate npm version forms should pass guard"
+contains "$STDOUT_PATH" '- Status: PASS' "legitimate forms status"
+pass "legitimate npm version forms (^1, 1.2, 1.x, 1.2.x, ~2, workspace:*, ^1.2.3) pass the guard"
 
 # ── Verification timeout is reported as a diagnosable stall, not a bare test failure ──
 # Regression coverage for the 2026-08-28 dogfood finding: the follow-up

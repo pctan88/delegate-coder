@@ -258,6 +258,56 @@ jq -se 'any(.[]; .event=="end" and .exit_code == 6 and .status == "DEPENDENCY_GU
 [[ "$(jq -s '[.[] | select(.event=="end")] | length' "$LOG")" -eq 1 ]] || fail "expected exactly one end event per run"
 pass "allow_paths violation logs DEPENDENCY_GUARD_FAIL"
 
+# ── validate_dependency_manifest.py unit tests ────────────────────────────
+python3 - <<'PY' || fail "validate_dependency_manifest unit tests failed"
+import sys
+from pathlib import Path
+repo_root = Path.cwd()
+sys.path.insert(0, str(repo_root / "plugins/delegate-coder/skills/delegate-coder/scripts/lib"))
+from validate_dependency_manifest import _parse, check
+
+# 1. Unvalidatable / legitimate forms should return None
+for legit in ["^1", "1.2", "1.x", "1.2.x", "~2", "workspace:*", "^1.2.3", "1.*", "1.2.*", "x", "*"]:
+    res = _parse(legit)
+    if legit == "^1.2.3":
+        assert res == (1, 2, 3), f"^1.2.3 expected (1, 2, 3), got {res}"
+    else:
+        assert res is None, f"{legit} expected None (skip), got {res}"
+
+# 2. Invalid non-version forms should return "invalid"
+for bad in ["abc", "", "   ", "not-a-version"]:
+    assert _parse(bad) == "invalid", f"{bad} expected invalid, got {_parse(bad)}"
+
+# 3. Check full manifest checks:
+# 3a. Legitimate forms PASS
+orig = '{"dependencies": {"p1": "1.0.0", "p2": "1.0.0", "p3": "1.0.0", "p4": "1.0.0", "p5": "1.0.0", "p6": "1.0.0", "p7": "1.0.0"}}'
+cand = '{"dependencies": {"p1": "^1", "p2": "1.2", "p3": "1.x", "p4": "1.2.x", "p5": "~2", "p6": "workspace:*", "p7": "^1.2.3"}}'
+check("package.json", orig, cand, label="test")
+
+# 3b. Real downgrade FAILS
+cand_downgrade = '{"dependencies": {"pkg": "^1.0.0"}}'
+orig_downgrade = '{"dependencies": {"pkg": "^2.0.0"}}'
+try:
+    check("package.json", orig_downgrade, cand_downgrade, label="test")
+    assert False, "expected downgrade to fail"
+except SystemExit:
+    pass
+
+# 3c. Downgrade with allow_downgrade PASSES
+check("package.json", orig_downgrade, cand_downgrade, allow_downgrade=["pkg"], label="test")
+check("package.json", orig_downgrade, cand_downgrade, allow_downgrade=True, label="test")
+
+# 3d. Non-version garbage "abc" FAILS
+cand_garbage = '{"dependencies": {"pkg": "abc"}}'
+try:
+    check("package.json", orig_downgrade, cand_garbage, label="test")
+    assert False, "expected abc to fail"
+except SystemExit:
+    pass
+
+PY
+pass "validate_dependency_manifest: legitimate forms, downgrades, allow_downgrade, and invalid values"
+
 # ── detect-test.sh: per-ecosystem inference ───────────────────────────────
 dt() { ( cd "$1" && bash "$DETECT_TEST" ); }
 mk() { mkdir -p "$TEST_ROOT/$1"; echo "$TEST_ROOT/$1"; }
