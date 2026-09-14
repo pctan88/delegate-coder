@@ -1,25 +1,35 @@
 # delegate-coder
 
-**Let Claude think. Let a cheaper agent type.**
+> **A transaction-safe local execution engine for Claude Code and AI coding assistants.**
+> Offload bounded, repetitive single-file implementation (test coverage backfills, DTO/boilerplate generation, mechanical refactoring) to local models via Ollama with zero token spend, deterministic test-driven self-healing, and automatic rollback.
 
-A Claude Code skill that delegates execution-heavy coding work — bulk codebase reading, implementation, refactoring, first-pass review — to a second CLI coding agent (MiMo Code, Aider, Codex CLI, Gemini CLI, Qwen Code, OpenCode, or any headless agent), while Claude keeps the planning, architecture, and final judgment.
+Keep your frontier model (Claude, Codex) for planning, architecture, and judgment. Let local open-weights models (`qwen3-coder:30b`, etc.) grind through repetitive single-file implementation with guaranteed test verification.
 
-**Why:** Claude Code usage is precious. Most of what burns it isn't thinking — it's reading 50 files and typing routine code. Free-tier worker agents can do that part. This skill makes the handoff automatic *and safe*.
+## The Operating Envelope (Where It Works & Where It Fails)
+
+Based on our empirical benchmark runs and dogfooding on real codebases (including Flutter/Dart and JavaScript targets):
+
+| Task Type | Fit | Observed Outcome & Rationale |
+|---|---|---|
+| **Unit Test Generation** (with reference template in context) | 🟢 **High** | In our Flutter testing on `b8717c7`, local Qwen passed 5/5 runs via retry when a structural template was provided. |
+| **Mechanical Refactors & DTOs** | 🟢 **High** | Single-file edits with unambiguous type signatures and objective test commands. |
+| **Repetitive Coverage Backfills** | 🟢 **High** | Amortizes specification and prompt-construction overhead across multiple files in unattended loops. |
+| **New Test Suites WITHOUT Template** | 🔴 **Unreliable** | In our Flutter benchmark, testing without a template failed 5/5 runs — local models need structural conventions to follow. |
+| **Quote-Heavy Regex / String Escaping** | 🔴 **Avoid** | Double-JSON serialization (JSON contract $\to$ JSON response) reliably corrupts complex quotes and escape sequences. |
+| **Bulk Codebase Reading** | 🔴 **Loss (−20% ROI)** | In our frozen A/B benchmark, delegating bulk reads cost ~20% more and took ~3× longer than letting the orchestrator read directly. |
+
+*See [benchmark/RESULTS.md](benchmark/RESULTS.md) for full methodology, hardware details, and raw JSONL records.*
 
 ## What makes this different
 
 This is not just a CLI wrapper. The skill encodes a **trust framework** for delegation:
 
-1. **Precise spec handoff** — Claude writes exact scope, constraints, and verification criteria before delegating. Vague handoffs are the #1 cause of wasted cycles.
-2. **Git branch isolation** — every exec task runs on a `delegate/*` branch. Nothing touches your working state.
-3. **Cheap, deterministic verification** — results are verified by `git diff --stat` + your test suite (which runs in a subshell and must be self-contained with full `PATH` or absolute binary paths), not by Claude re-reading code. The worker's self-reported "I ran the tests" is never trusted; orchestrator/independent verification is mandatory. Diffs can't lie; summaries can.
-4. **Read-only modes where supported** — analysis tasks use the worker's read-only mode (MiMo `plan`, Codex `read-only` sandbox) for zero-risk delegation.
-5. **Escalation rule** — two failures on the same task and Claude stops delegating it. No silent retry loops eating your savings.
-6. **Safe permissions guidance** — granular allow/deny config instead of blanket `--dangerously-skip-permissions` / `--yolo`.
-
-## Experimental (v2)
-
-v2 adds several new config options: **model selection**, **enable/scope** guards, **strict/graceful fallback**, and a **path allowlist**. These all default to off or prior behavior, so existing setups are unaffected. The v2 routing and contract paths have deterministic unit coverage. Local-Qwen performance is still unproven until the paired local benchmark is run; the frozen benchmark results below are historical Claude+MiMo v1 evidence and do not measure Qwen.
+1. **Transaction-Safe Contracts** — single-file Task Contracts snapshot your working state and automatically roll back on test failure, timeout, or schema corruption.
+2. **Git Branch Isolation** — every execution task runs on an isolated feature or `delegate/*` branch. Nothing touches your active working state without verification.
+3. **Cheap, Deterministic Verification** — results are verified by `git diff --stat` + your repo's test suite, not by an LLM re-reading code. Diffs and exit codes cannot hallucinate; summaries can.
+4. **Adaptive Fallback Routing** — automatically falls back to secondary workers or orchestrator native paths when local workers fail to start.
+5. **Full Observability & Audit Trail** — structured JSONL telemetry logging phase durations, token counts, and parent run-linking.
+6. **Escalation Rule** — two failures on the same task and delegation halts. No infinite retry loops burning resources.
 
 ## Supported worker agents
 
@@ -258,7 +268,24 @@ The JSON may also be piped on stdin. Contract mode uses Ollama structured output
 
 Set `DELEGATE_MODEL` to select another local Ollama model, `DELEGATE_NUM_CTX` to change the context limit (default `32768`), `DELEGATE_CURL_TIMEOUT`/`DELEGATE_TEST_TIMEOUT` for timeouts, and `DELEGATE_KEEP_ALIVE` for model retention (default `30m`). If the model produces no change, the report says `NOOP`; if it reports `done_reason: length`, the file is not replaced. A top-level JSON array runs contracts sequentially and returns one combined report with aggregate retries.
 
-Runs through `delegate.sh` also append valid JSON start/end events, status, duration, retries, restoration state, and Ollama timing metrics to `.claude/delegate-coder.log`, so `/delegate stats` includes contract executions.
+## Unattended Coverage Backfill (`scripts/coverage_loop.sh`)
+
+Where `delegate-coder` delivers its highest ROI is in **unattended, repetitive execution loops** where prompt-specification costs are amortized across multiple files.
+
+The repository includes a standalone coverage loop script that automatically matches source files, attaches reference test templates, and delegates unit test synthesis to local models via `delegate.sh contract`:
+
+```bash
+./scripts/coverage_loop.sh \
+  --source-glob "lib/domain/model/*.dart" \
+  --template "test/core/utils/duration_formatter_test.dart" \
+  --target-pattern "test/domain/model/{name}_test.dart" \
+  --test-cmd "flutter test {test_target}"
+```
+
+Features:
+- **Template Context Injection**: Automatically pairs each source file with the designated template in `context_files` to ensure consistent test framework scaffolding.
+- **Pre-check Existing Tests**: Skips targets that already pass; re-generates and tests missing or failing fixtures.
+- **Fail-Safe Rollback**: Leverages contract mode's native Git snapshot and rollback on test failures.
 
 ## Does it actually save credits?
 

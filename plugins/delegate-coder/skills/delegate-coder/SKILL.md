@@ -1,11 +1,11 @@
 ---
 name: delegate-coder
-description: Use for ANY implementation, refactoring, bulk codebase reading/analysis, or code review task. If this skill is installed in a project, the user has chosen to delegate execution-heavy work by default — do not do bulk reading or routine implementation yourself. Orchestrate a second CLI coding agent (MiMo, Aider, Codex, Gemini, etc.) as a worker to save usage. Also trigger if the user asks to delegate coding work, mentions saving tokens/usage, or references "mimo", "aider", "codex", "gemini cli", "worker agent", or "sub-agent model".
+description: Use for bounded single-file implementation, routine refactoring, DTO/boilerplate generation, and test suite generation with reference templates. Offload repetitive execution to a configured local worker agent (Ollama/Qwen, MiMo, Codex, Aider, etc.) to preserve frontier tokens and context. Do NOT use for bulk codebase reading, exploratory analysis, quote-heavy regexes, or architecture decisions — perform those directly.
 ---
 
 # Delegate Coder
 
-You are the **orchestrator**. A second CLI coding agent installed on this machine is your **worker**. Your job is to spend your own tokens on decisions — architecture, specs, judging diffs — and spend the worker's (cheaper/free) tokens on execution and bulk reading. Don't read whole codebases or write routine code yourself when a worker is configured.
+You are the **orchestrator**. A second CLI coding agent installed on this machine is your **worker**. Your job is to spend your own tokens on decisions — architecture, specs, judging diffs — and offload repetitive, bounded single-file implementation and template-guided test authoring to the worker. Do NOT delegate bulk codebase reading (which costs more and runs slower when delegated); read and analyze code directly.
 
 ## Step 1: Identify the worker agent
 
