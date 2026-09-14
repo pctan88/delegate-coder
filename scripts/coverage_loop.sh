@@ -6,7 +6,11 @@
 #     --source-glob "lib/domain/model/*.dart" \
 #     --template "test/core/utils/duration_formatter_test.dart" \
 #     --target-pattern "test/domain/model/{name}_test.dart" \
-#     --test-cmd "flutter test {test_target}"
+#     --test-cmd "flutter test {test_target}" \
+#     [--commit-each] \
+#     [--no-commit] \
+#     [--stop-on-failure] \
+#     [--dry-run]
 #
 set -euo pipefail
 
@@ -16,6 +20,7 @@ TARGET_PATTERN=""
 TEST_CMD=""
 DRY_RUN=0
 STOP_ON_FAILURE=0
+COMMIT_EACH=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -23,16 +28,26 @@ while [[ $# -gt 0 ]]; do
     --template) TEMPLATE_FILE="$2"; shift 2 ;;
     --target-pattern) TARGET_PATTERN="$2"; shift 2 ;;
     --test-cmd) TEST_CMD="$2"; shift 2 ;;
+    --commit-each) COMMIT_EACH=1; shift ;;
+    --no-commit) COMMIT_EACH=0; shift ;;
     --stop-on-failure) STOP_ON_FAILURE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help)
-      echo "Usage: scripts/coverage_loop.sh --source-glob <glob> --template <template_path> --target-pattern <pattern> --test-cmd <cmd>"
-      echo "Example:"
-      echo "  scripts/coverage_loop.sh \\"
-      echo "    --source-glob 'lib/domain/model/*.dart' \\"
-      echo "    --template 'test/template_test.dart' \\"
-      echo "    --target-pattern 'test/domain/model/{name}_test.dart' \\"
-      echo "    --test-cmd 'flutter test {test_target}'"
+      echo "Usage: scripts/coverage_loop.sh --source-glob <glob> --template <template_path> --target-pattern <pattern> --test-cmd <cmd> [options]"
+      echo ""
+      echo "Options:"
+      echo "  --commit-each         Stage and commit accepted tests on the active branch between iterations (default)"
+      echo "  --no-commit           Do not commit accepted tests (subsequent contracts will fail if target changes are left unstaged)"
+      echo "  --stop-on-failure     Stop the loop immediately if a contract fails"
+      echo "  --dry-run             Print planned executions without dispatching contracts"
+      echo "  -h, --help            Show this help message"
+      echo ""
+      echo "Workflow & End-State Note:"
+      echo "  Run this script on a dedicated feature branch (e.g. 'git switch -c feat/coverage-backfill')."
+      echo "  If starting from main/master, contract mode switches to an isolated 'delegate/contract-*' branch."
+      echo "  With --commit-each (default), all passing tests are committed in succession on the working branch."
+      echo "  When the run finishes, merge or rebase the resulting branch back into your base branch:"
+      echo "    git switch main && git merge <branch-name>"
       exit 0
       ;;
     *)
@@ -51,7 +66,7 @@ if [[ ! -f "$TEMPLATE_FILE" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DELEGATE_SCRIPT="$SCRIPT_DIR/../plugins/delegate-coder/skills/delegate-coder/scripts/delegate.sh"
+DELEGATE_SCRIPT="${DELEGATE_SCRIPT:-$SCRIPT_DIR/../plugins/delegate-coder/skills/delegate-coder/scripts/delegate.sh}"
 
 echo "=================================================="
 echo "⚡ delegate-coder unattended coverage backfill loop"
@@ -60,11 +75,13 @@ echo "Source glob:     $SOURCE_GLOB"
 echo "Template file:   $TEMPLATE_FILE"
 echo "Target pattern:  $TARGET_PATTERN"
 echo "Test command:    $TEST_CMD"
+echo "Commit each:     $COMMIT_EACH"
 echo "Dry run:         $DRY_RUN"
 echo "=================================================="
 
 # Expand glob
 shopt -s nullglob
+# shellcheck disable=SC2206
 sources=( $SOURCE_GLOB )
 shopt -u nullglob
 
@@ -108,13 +125,14 @@ for i in "${!sources[@]}"; do
 
   instructions="Write unit tests for the model/classes in $src: cover initialization, serialization/parsing, methods, and edge cases. Match the structural style (imports, framework runner, test organization) of the provided template test file $TEMPLATE_FILE. Target public API only."
 
-  contract_payload="$(python3 - <<PY
-import json
+  # Bug B fix: pass arguments safely via environment variables to python to avoid shell heredoc interpolation injection
+  contract_payload="$(TARGET_FILE="$target" SRC_FILE="$src" TEMPLATE_PATH="$TEMPLATE_FILE" INSTRUCTIONS="$instructions" CMD="$current_cmd" python3 - <<'PY'
+import json, os
 payload = {
-    "target_file": "$target",
-    "context_files": ["$src", "$TEMPLATE_FILE"],
-    "instructions": "$instructions",
-    "test_command": "$current_cmd"
+    "target_file": os.environ["TARGET_FILE"],
+    "context_files": [os.environ["SRC_FILE"], os.environ["TEMPLATE_PATH"]],
+    "instructions": os.environ["INSTRUCTIONS"],
+    "test_command": os.environ["CMD"]
 }
 print(json.dumps(payload))
 PY
@@ -132,6 +150,15 @@ PY
   if [[ "$status" =~ ^(PASS|NOOP)$ && $exit_code -eq 0 ]]; then
     echo "  -> Result: PASS"
     passed=$((passed + 1))
+
+    # Bug A fix: commit each accepted test or prepare clean worktree for subsequent contract
+    if [[ "$COMMIT_EACH" -eq 1 && -f "$target" ]]; then
+      echo "  -> Committing accepted test to keep worktree clean for next contract..."
+      git add "$target"
+      if ! git diff --cached --quiet; then
+        git commit -m "test: backfill $target via delegate-coder" >/dev/null 2>&1 || true
+      fi
+    fi
   else
     echo "  -> Result: $status (exit code $exit_code)"
     failed=$((failed + 1))
