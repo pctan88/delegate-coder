@@ -286,6 +286,19 @@ Features:
 - **Template Context Injection**: Automatically pairs each source file with the designated template in `context_files` to ensure consistent test framework scaffolding.
 - **Pre-check Existing Tests**: Skips targets that already pass; re-generates and tests missing or failing fixtures.
 - **Fail-Safe Rollback**: Leverages contract mode's native Git snapshot and rollback on test failures.
+- **Clean-Tree Hygiene (`--commit-each`)**: Stages and commits accepted tests after each passing iteration so subsequent contracts start with a clean worktree.
+
+### Workflow & End-State
+1. Run the loop on a dedicated feature branch:
+   ```bash
+   git switch -c feat/coverage-backfill
+   ./scripts/coverage_loop.sh --source-glob "lib/models/*.dart" --template "test/template_test.dart" --target-pattern "test/models/{name}_test.dart" --test-cmd "flutter test {test_target}"
+   ```
+2. If starting from `main` or `master`, contract mode switches to an isolated `delegate/contract-*` branch. With `--commit-each` (default), all passing tests are committed in succession along that working branch.
+3. When the loop completes, inspect the diff and merge or rebase the resulting branch back into your base branch:
+   ```bash
+   git switch main && git merge <branch-name>
+   ```
 
 ## Does it actually save credits?
 

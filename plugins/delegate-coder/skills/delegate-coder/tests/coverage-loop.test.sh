@@ -48,7 +48,7 @@ test_multi_file_loop_commit_each() {
   local fixture_repo="$TEST_ROOT/mock_repo"
   mkdir -p "$fixture_repo/lib/models" "$fixture_repo/test/templates" "$fixture_repo/bin"
 
-  git -C "$fixture_repo" init -q
+  git -C "$fixture_repo" init -b main -q
   git -C "$fixture_repo" config user.email test@example.invalid
   git -C "$fixture_repo" config user.name test
 
@@ -60,21 +60,29 @@ test_multi_file_loop_commit_each() {
   git -C "$fixture_repo" add .
   git -C "$fixture_repo" commit -qm "initial"
 
-  # Create a mock delegate.sh that simulates contract mode:
-  # It checks that the worktree is clean before executing. If dirty, it fails!
-  # If clean, it writes the test file and exits with PASS.
+  # Create a mock delegate.sh that replicates real contract mode:
+  # 1. Verifies worktree is clean before the first write.
+  # 2. If on main, creates/switches to a delegate/* branch.
+  # 3. Writes the target test file and leaves it UNSTAGED (exact contract router behavior).
+  # 4. Reports PASS.
   cat > "$fixture_repo/bin/mock_delegate.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
+current_branch="$(git branch --show-current 2>/dev/null)"
 # Contract mode clean worktree assertion
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "Error: contract mode requires a clean worktree before the first write" >&2
   echo "- Status: FAIL"
   exit 1
 fi
+if [[ "$current_branch" == "main" || "$current_branch" == "master" ]]; then
+  contract_branch="delegate/contract-$(date +%s)-$$"
+  git switch -c "$contract_branch" >/dev/null 2>&1
+fi
 payload="$2"
 target="$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["target_file"])' "$payload")"
 mkdir -p "$(dirname "$target")"
+# Contract router leaves the accepted file unstaged on the working branch
 echo "void main() { /* generated test */ }" > "$target"
 echo "- Status: PASS"
 exit 0
@@ -98,13 +106,26 @@ SH
   [[ -f "$fixture_repo/test/models/model_a_test.dart" ]] || fail "model_a_test.dart was not created"
   [[ -f "$fixture_repo/test/models/model_b_test.dart" ]] || fail "model_b_test.dart was not created (loop broke on 2nd file!)"
 
-  # Assert git log has commits for both files
+  # Assert git log has commits for both files on the current working branch
   local commit_count
   commit_count="$(git -C "$fixture_repo" rev-list --count HEAD)"
   # initial + 2 backfill commits = 3 commits
   [[ "$commit_count" -ge 3 ]] || fail "Expected at least 3 commits, got $commit_count"
 
-  pass "Bug A: coverage_loop processes 2+ files successfully with --commit-each keeping worktree clean"
+  # Assert worktree is clean at the end
+  [[ -z "$(git -C "$fixture_repo" status --porcelain)" ]] || fail "Worktree was left dirty after coverage loop"
+
+  # Assert all accepted work is committed and recoverable via git log
+  local recent_log
+  recent_log="$(git -C "$fixture_repo" log -n 2 --oneline)"
+  if ! echo "$recent_log" | grep -q "test: backfill test/models/model_b_test.dart"; then
+    fail "Missing commit for model_b_test.dart"
+  fi
+  if ! echo "$recent_log" | grep -q "test: backfill test/models/model_a_test.dart"; then
+    fail "Missing commit for model_a_test.dart"
+  fi
+
+  pass "Bug A: coverage_loop processes 2+ files with contract-mode delegate branching & unstaged leaves, keeping commits intact and worktree clean"
 }
 
 test_payload_escaping

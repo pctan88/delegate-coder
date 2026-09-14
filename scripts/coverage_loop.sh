@@ -20,8 +20,7 @@ TARGET_PATTERN=""
 TEST_CMD=""
 DRY_RUN=0
 STOP_ON_FAILURE=0
-COMMIT_EACH=0
-BASE_BRANCH=""
+COMMIT_EACH=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -30,18 +29,25 @@ while [[ $# -gt 0 ]]; do
     --target-pattern) TARGET_PATTERN="$2"; shift 2 ;;
     --test-cmd) TEST_CMD="$2"; shift 2 ;;
     --commit-each) COMMIT_EACH=1; shift ;;
-    --base-branch) BASE_BRANCH="$2"; shift 2 ;;
+    --no-commit) COMMIT_EACH=0; shift ;;
     --stop-on-failure) STOP_ON_FAILURE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help)
       echo "Usage: scripts/coverage_loop.sh --source-glob <glob> --template <template_path> --target-pattern <pattern> --test-cmd <cmd> [options]"
       echo ""
       echo "Options:"
-      echo "  --commit-each         Stage and commit passing tests between iterations to keep the worktree clean"
-      echo "  --base-branch <name>  Checkout base branch before each iteration (resets uncommitted changes to keep tree clean)"
+      echo "  --commit-each         Stage and commit accepted tests on the active branch between iterations (default)"
+      echo "  --no-commit           Do not commit accepted tests (subsequent contracts will fail if target changes are left unstaged)"
       echo "  --stop-on-failure     Stop the loop immediately if a contract fails"
       echo "  --dry-run             Print planned executions without dispatching contracts"
       echo "  -h, --help            Show this help message"
+      echo ""
+      echo "Workflow & End-State Note:"
+      echo "  Run this script on a dedicated feature branch (e.g. 'git switch -c feat/coverage-backfill')."
+      echo "  If starting from main/master, contract mode switches to an isolated 'delegate/contract-*' branch."
+      echo "  With --commit-each (default), all passing tests are committed in succession on the working branch."
+      echo "  When the run finishes, merge or rebase the resulting branch back into your base branch:"
+      echo "    git switch main && git merge <branch-name>"
       exit 0
       ;;
     *)
@@ -62,11 +68,6 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DELEGATE_SCRIPT="${DELEGATE_SCRIPT:-$SCRIPT_DIR/../plugins/delegate-coder/skills/delegate-coder/scripts/delegate.sh}"
 
-# Default to --commit-each if neither --commit-each nor --base-branch is specified
-if [[ "$COMMIT_EACH" -eq 0 && -z "$BASE_BRANCH" ]]; then
-  COMMIT_EACH=1
-fi
-
 echo "=================================================="
 echo "⚡ delegate-coder unattended coverage backfill loop"
 echo "=================================================="
@@ -75,7 +76,6 @@ echo "Template file:   $TEMPLATE_FILE"
 echo "Target pattern:  $TARGET_PATTERN"
 echo "Test command:    $TEST_CMD"
 echo "Commit each:     $COMMIT_EACH"
-echo "Base branch:     ${BASE_BRANCH:-(none)}"
 echo "Dry run:         $DRY_RUN"
 echo "=================================================="
 
@@ -106,14 +106,6 @@ for i in "${!sources[@]}"; do
   echo ""
   echo "[$((i + 1))/$total] Processing: $src"
   echo "  -> Target Test: $target"
-
-  if [[ -n "$BASE_BRANCH" ]]; then
-    echo "  -> Checking out base branch: $BASE_BRANCH"
-    git checkout "$BASE_BRANCH" >/dev/null 2>&1 || {
-      echo "Error: Failed to checkout base branch '$BASE_BRANCH'" >&2
-      exit 1
-    }
-  fi
 
   if [[ -f "$target" ]]; then
     echo "  -> Test file already exists. Checking existing test..."
