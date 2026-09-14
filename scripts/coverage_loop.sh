@@ -8,7 +8,7 @@
 #     --target-pattern "test/domain/model/{name}_test.dart" \
 #     --test-cmd "flutter test {test_target}" \
 #     [--commit-each] \
-#     [--base-branch <branch>] \
+#     [--no-commit] \
 #     [--stop-on-failure] \
 #     [--dry-run]
 #
@@ -155,7 +155,9 @@ PY
     if [[ "$COMMIT_EACH" -eq 1 && -f "$target" ]]; then
       echo "  -> Committing accepted test to keep worktree clean for next contract..."
       git add "$target"
-      git commit -m "test: backfill $target via delegate-coder" >/dev/null 2>&1 || true
+      if ! git diff --cached --quiet; then
+        git commit -m "test: backfill $target via delegate-coder" >/dev/null 2>&1 || true
+      fi
     fi
   else
     echo "  -> Result: $status (exit code $exit_code)"
